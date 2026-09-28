@@ -9,14 +9,13 @@ from quant.backtest.broker import (
     Broker,
     ExecutionReport,
     Fill,
-    KCB_MIN_BUY_VOLUME,
-    MAIN_LOT_SIZE,
     Order,
     Reject,
     RejectReason,
     round_buy_volume,
 )
 from quant.backtest.fee import FeeModel
+from quant.backtest.lot import MIN_VOLUME
 
 MODEL = FeeModel()
 BROKER = Broker(MODEL)
@@ -341,7 +340,7 @@ def test_round_buy_volume_main_board() -> None:
 
 def test_round_buy_volume_kcb() -> None:
     assert round_buy_volume(KCB, 199) == 0
-    assert round_buy_volume(KCB, KCB_MIN_BUY_VOLUME) == 200
+    assert round_buy_volume(KCB, MIN_VOLUME["kcb"]) == 200
     assert round_buy_volume(KCB, 250) == 250  # 超过 200 按 1 股递增
     assert round_buy_volume("689009.SH", 201) == 201
 
