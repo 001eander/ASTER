@@ -252,6 +252,7 @@ def test_daily_bars_falls_back_to_tx_for_bj(monkeypatch: pytest.MonkeyPatch) -> 
 def test_daily_bars_empty_when_all_sources_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", lambda **_kw: pd.DataFrame())
     monkeypatch.setattr(ak_source.ak, "stock_zh_a_daily", lambda **_kw: pd.DataFrame())
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist_tx", lambda **_kw: pd.DataFrame())
 
     out = AkshareSource().daily_bars(["600519.SH"], dt.date(2026, 9, 1), dt.date(2026, 9, 2))
     assert out.height == 0
@@ -586,3 +587,77 @@ def test_em_circuit_breaker_resets_on_success(monkeypatch: pytest.MonkeyPatch) -
     # 前两只走回退，第三只东财恢复后直连成功，熔断计数复位
     assert source._em_consecutive_failures == 0
     assert out.filter(pl.col("instrument") == "600002.SH").height == 2
+# ---------------------------------------------------------------------------
+# 沪深第三回退：腾讯兜底
+# ---------------------------------------------------------------------------
+
+
+def _tx_raw() -> object:
+    return _pandas(
+        pl.DataFrame(
+            {
+                "date": [dt.date(2026, 9, 1)],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.0],
+                "close": [10.5],
+                "volume": [1000.0],
+                "amount": [10_500.0],
+            }
+        )
+    )
+
+
+def _tx_hfq() -> object:
+    return _pandas(
+        pl.DataFrame(
+            {
+                "date": [dt.date(2026, 9, 1)],
+                "close": [21.0],
+            }
+        )
+    )
+
+
+def test_daily_bars_falls_back_to_tx_when_em_and_sina_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", _boom_em)
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_daily", _raise)
+    monkeypatch.setattr(
+        ak_source.ak,
+        "stock_zh_a_hist_tx",
+        lambda **kw: _tx_raw() if kw["adjust"] == "" else _tx_hfq(),
+    )
+
+    out = AkshareSource().daily_bars(["600519.SH"], dt.date(2026, 9, 1), dt.date(2026, 9, 1))
+
+    check_schema(out, DAILY_BARS)
+    assert out.height == 1
+    assert out["adjfactor"].to_list() == [2.0]
+
+
+def test_sina_circuit_breaker_skips_sina_after_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sina_calls = {"n": 0}
+
+    def counting_boom(**_kw: object) -> object:
+        sina_calls["n"] += 1
+        raise RuntimeError("新浪被限流")
+
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", _boom_em)
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_daily", counting_boom)
+    monkeypatch.setattr(
+        ak_source.ak,
+        "stock_zh_a_hist_tx",
+        lambda **kw: _tx_raw() if kw["adjust"] == "" else _tx_hfq(),
+    )
+
+    source = AkshareSource()
+    instruments = [f"60001{i}.SH" for i in range(8)]
+    out = source.daily_bars(instruments, dt.date(2026, 9, 1), dt.date(2026, 9, 1))
+
+    assert out.height == 8
+    # 东财与新浪都被熔断：新浪底层调用停在阈值，后续票直连腾讯
+    assert sina_calls["n"] == ak_source.CIRCUIT_THRESHOLD * ak_source.RETRY_TIMES

@@ -3,8 +3,9 @@
 设计
 ----
 - 行情优先取东方财富 ``stock_zh_a_hist``（覆盖沪深北），失败时按交易所回退：
-  沪市 / 深市用新浪 ``stock_zh_a_daily``，北交所用腾讯 ``stock_zh_a_hist_tx``。
-  回退只为在网络或接口波动时保持可用，字段口径统一在本模块内归一化。
+  沪市 / 深市依次走新浪 ``stock_zh_a_daily``、腾讯 ``stock_zh_a_hist_tx``，
+  北交所走腾讯。回退只为在网络或接口波动时保持可用，字段口径统一在本模块内
+  归一化。每个源按实例熔断：连续失败达到阈值后跳过，恢复自动复位。
 - 全部网络访问都经由 akshare，返回的 ``pandas.DataFrame`` 立刻转成 polars（环境无
   pyarrow，用 :func:`_from_pandas` 按列构造），后续处理不碰 pandas。
 - 每个 akshare 调用都带有限重试与调用间隔，避免全市场抓取被限流。
@@ -82,9 +83,11 @@ RETRY_TIMES: int = 3
 RETRY_BASE_DELAY_SECONDS: float = 1.0
 #: 东方财富成交量单位「手」换算为「股」的系数。
 EM_VOLUME_LOT_SIZE: float = 100.0
-#: 东财行情连续失败达到该次数后，本实例后续请求跳过东财直连（熔断）。
-#: 网络层故障（如 IP 被 RST）下避免每只股票白付 6 次重试的耗时。
-EM_CIRCUIT_THRESHOLD: int = 5
+#: 单个行情源连续失败达到该次数后，本实例后续请求跳过该源（熔断）。
+#: 网络层故障（如 IP 被 RST / 被限流）下避免每只股票白付多次重试的耗时。
+CIRCUIT_THRESHOLD: int = 5
+#: 兼容旧名，后续统一用 CIRCUIT_THRESHOLD。
+EM_CIRCUIT_THRESHOLD: int = CIRCUIT_THRESHOLD
 #: akshare 日期参数格式。
 DATE_FORMAT: str = "%Y%m%d"
 #: 腾讯接口起始年份的兜底值，用于绕过 akshare 的 ``qfqday`` bug。
@@ -245,13 +248,19 @@ def _normalize_silent(code: str) -> str | None:
 class AkshareSource:
     """akshare 数据源，满足 ``quant.data.source.base.DataSource`` 协议。
 
-    实例带东财熔断状态：``_fetch_daily_em`` 连续抛异常达到
-    ``EM_CIRCUIT_THRESHOLD`` 次后，本实例后续日线请求直连回退源，
-    东财恢复前不再逐票重试。返回空数据（如退市票无记录）不计入失败。
+    日线按交易所走「东财 → 新浪（沪深）→ 腾讯（沪深北兜底）」链；北交所为
+    「东财 → 腾讯」。实例按源熔断：某源连续抛异常达到 ``CIRCUIT_THRESHOLD``
+    次后跳过该源，恢复成功自动复位；返回空数据（如退市票无记录）不计入失败。
+    熔断状态是进程内的，跨进程重启后重新探测。
     """
 
     def __init__(self) -> None:
-        self._em_consecutive_failures: int = 0
+        self._source_failures: dict[str, int] = {}
+
+    @property
+    def _em_consecutive_failures(self) -> int:
+        """东财连续失败计数（向后兼容的只读视图）。"""
+        return self._source_failures.get("_fetch_daily_em", 0)
 
     # ------------------------------------------------------------------
     # 日线
@@ -280,36 +289,30 @@ class AkshareSource:
         self, instrument: str, start: date, end: date
     ) -> pl.DataFrame | None:
         digits, exchange = instrument.split(".")
-        frame: pl.DataFrame | None = None
-        if self._em_consecutive_failures < EM_CIRCUIT_THRESHOLD:
+        fetchers: list[Callable[[str, str, date, date], pl.DataFrame | None]] = [
+            self._fetch_daily_em
+        ]
+        if exchange in ("SH", "SZ"):
+            fetchers += [self._fetch_daily_sina, self._fetch_daily_tx]
+        else:
+            fetchers.append(self._fetch_daily_tx)
+        for fetch in fetchers:
+            name = fetch.__name__
+            if self._source_failures.get(name, 0) >= CIRCUIT_THRESHOLD:
+                continue
             try:
-                frame = self._fetch_daily_em(instrument, digits, start, end)
+                frame = fetch(instrument, digits, start, end)
             except Exception as exc:  # noqa: BLE001
-                self._em_consecutive_failures += 1
-                logger.warning(
-                    "东财抓取 %s 失败（连续 %d 次）：%s",
-                    instrument,
-                    self._em_consecutive_failures,
-                    exc,
-                )
-                if self._em_consecutive_failures == EM_CIRCUIT_THRESHOLD:
-                    logger.warning(
-                        "东财连续失败 %d 次，本实例后续日线改走回退源",
-                        EM_CIRCUIT_THRESHOLD,
-                    )
-            else:
-                self._em_consecutive_failures = 0
-        if frame is not None and frame.height:
-            return frame
-        fallback = (
-            self._fetch_daily_sina if exchange in ("SH", "SZ") else self._fetch_daily_tx
-        )
-        try:
-            frame = fallback(instrument, digits, start, end)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("%s 抓取 %s 失败：%s", fallback.__name__, instrument, exc)
-            return None
-        return frame if frame is not None and frame.height else None
+                failures = self._source_failures.get(name, 0) + 1
+                self._source_failures[name] = failures
+                logger.warning("%s 抓取 %s 失败（连续 %d 次）：%s", name, instrument, failures, exc)
+                if failures == CIRCUIT_THRESHOLD:
+                    logger.warning("%s 连续失败 %d 次，本实例后续跳过该源", name, CIRCUIT_THRESHOLD)
+                continue
+            self._source_failures[name] = 0
+            if frame is not None and frame.height:
+                return frame
+        return None
 
     def _fetch_daily_em(
         self, instrument: str, digits: str, start: date, end: date
