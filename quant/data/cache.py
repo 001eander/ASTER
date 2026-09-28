@@ -548,6 +548,69 @@ def update_daily(
     return report
 
 
+def update_corporate_actions(
+    source: DataSource,
+    data_dir: Path,
+    *,
+    start: date,
+    end: date,
+    instruments: list[str] | None = None,
+) -> FetchReport:
+    """公司行为增量刷新：重抓 ``[start, end]`` 窗口并与缓存合并。
+
+    公司行为会修订历史（补录、更正除权除息日），因此每次对窗口内全市场覆盖重抓，
+    而不是像日线那样只补缺口；``_merge_corporate_actions`` 按 ``(date, instrument)``
+    去重，同窗口重复跑幂等。``instruments`` 为 ``None`` 时优先用
+    ``instruments.parquet`` 的代码，缺失则向数据源取并落盘。
+
+    逐批抓取，单批失败只记账不抛异常，统计写在 ``FetchReport`` 的 ``ca_*`` 字段。
+    """
+    started = time.monotonic()
+    data_dir = Path(data_dir)
+    _ensure_data_dir(data_dir)
+    report = FetchReport()
+
+    if instruments is None:
+        if (data_dir / INSTRUMENTS_FILE).exists():
+            instruments = load_instruments(data_dir)["instrument"].to_list()
+        else:
+            info = source.instrument_info()
+            check_schema(info, INSTRUMENT_INFO, name="instrument_info")
+            _atomic_write_parquet(data_dir / INSTRUMENTS_FILE, info)
+            instruments = info["instrument"].to_list()
+
+    for offset in range(0, len(instruments), CA_BATCH_SIZE):
+        batch = instruments[offset : offset + CA_BATCH_SIZE]
+        try:
+            frame = _normalize_actions(source.corporate_actions(batch, start, end))
+            if frame.height:
+                frame = frame.filter(
+                    (pl.col("date") >= start) & (pl.col("date") <= end)
+                )
+        except Exception as exc:  # noqa: BLE001 - 单批失败记账继续
+            message = str(exc)[:500]
+            for instrument in batch:
+                report.ca_failed += 1
+                report.ca_failures[instrument] = str(exc)
+            logger.warning("抓取公司行为批次失败（%d 只）：%s", len(batch), message)
+            continue
+        if frame.height:
+            _merge_corporate_actions(data_dir, frame)
+        present = set(frame["instrument"].to_list()) if frame.height else set()
+        for instrument in batch:
+            if instrument in present:
+                report.ca_ok += 1
+            else:
+                report.ca_empty += 1
+
+    if not (data_dir / CORPORATE_ACTIONS_FILE).exists():
+        # 无任何公司行为时也落一个空表，保证缓存布局契约完整。
+        _atomic_write_parquet(data_dir / CORPORATE_ACTIONS_FILE, _empty(CORPORATE_ACTIONS))
+
+    report.elapsed_seconds = time.monotonic() - started
+    return report
+
+
 # ---------------------------------------------------------------------------
 # 读取
 # ---------------------------------------------------------------------------
@@ -656,5 +719,6 @@ __all__ = [
     "load_calendar",
     "load_corporate_actions",
     "load_instruments",
+    "update_corporate_actions",
     "update_daily",
 ]
