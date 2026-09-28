@@ -8,8 +8,8 @@
 
 数量为 0 表示不持有 / 不交易，视为合法。
 
-TODO(#10 / #12 统一)：broker 与 roundlot 由并行任务各自实现了一份等价规则，
-后续以本模块为唯一口径，broker 改为 import 这里。本模块不依赖 broker。
+broker（:mod:`quant.backtest.broker`）与权重取整（:mod:`quant.portfolio.roundlot`）
+统一以本模块为唯一口径。
 """
 from __future__ import annotations
 

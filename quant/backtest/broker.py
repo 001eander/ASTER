@@ -17,8 +17,9 @@ T 日收盘后生成订单，T+1 开盘撮合，涨跌停判定基于 T+1 开盘
 - **涨跌停（严格版）**：买单开盘价触及涨停（``open >= limit_up``）拒，卖单触及跌停
   （``open <= limit_down``）拒；``limit_*`` 为 null（新股首日等）时跳过该检查。
   浮点比较留 :data:`PRICE_EPSILON` 容差。
-- **整手**：主板 / 创业板 / 北交所买入按 100 股整数倍向下取整；科创板（688 / 689）
-  买入最低 200 股，超过 200 股部分按 1 股递增。卖出不卡整手，允许零股出清，
+- **整手**：规则唯一口径在 :mod:`quant.backtest.lot`——主板 / 创业板买入按
+  100 股整数倍向下取整；科创板（688 / 689）最低 200 股、超过部分按 1 股递增；
+  北交所最低 100 股、超过部分按 1 股递增。卖出不卡整手，允许零股出清，
   成交股数取 ``min(订单量, sellable)``。
 - **T+1 冻结**：卖出先截断到 ``sellable``；截断后为零（含无持仓）才拒 T1_FROZEN，
   超出部分按部分成交处理，不整单拒。
@@ -38,23 +39,15 @@ import polars as pl
 
 from quant.backtest.account import CASH_EPSILON, Account
 from quant.backtest.fee import Fee, FeeModel, Side
+from quant.backtest.lot import lot_step, round_lot_down
 from quant.data.schema import board_of
 
 # ---------------------------------------------------------------------------
-# 配置：整手与价格容差常量
+# 配置：价格容差常量（整手规则统一在 quant.backtest.lot）
 # ---------------------------------------------------------------------------
 
-#: 主板 / 创业板 / 北交所买入最小申报单位：100 股整数倍。
-MAIN_LOT_SIZE: int = 100
-#: 科创板买入最低申报数量（股），超过部分按 1 股递增。
-KCB_MIN_BUY_VOLUME: int = 200
-#: 科创板整手递增步长（股）。
-KCB_LOT_STEP: int = 1
 #: 价格比较容差（元）：涨跌停触价判定吸收浮点误差。
 PRICE_EPSILON: float = 1e-9
-
-#: 板块代码，科创板按 1 股递增，其余按主板的 100 股整数倍。
-_KCB_BOARD: str = "kcb"
 
 _VALID_SIDES: frozenset[str] = frozenset({"buy", "sell"})
 
@@ -172,20 +165,13 @@ class ExecutionReport:
 
 
 def buy_lot_step(instrument: str) -> int:
-    """买入缩单时的最小递减步长（股）：科创板 1，其余 100。"""
-    return KCB_LOT_STEP if board_of(instrument) == _KCB_BOARD else MAIN_LOT_SIZE
+    """买入缩单时的最小递减步长（股），口径见 :mod:`quant.backtest.lot`。"""
+    return lot_step(board_of(instrument))
 
 
 def round_buy_volume(instrument: str, volume: int) -> int:
-    """把买入意愿股数按板块整手规则**向下取整**。
-
-    返回 0 表示取整后不足一手（主板不足 100 股，科创板不足 200 股）。
-    """
-    if volume <= 0:
-        return 0
-    if board_of(instrument) == _KCB_BOARD:
-        return volume if volume >= KCB_MIN_BUY_VOLUME else 0
-    return (volume // MAIN_LOT_SIZE) * MAIN_LOT_SIZE
+    """把买入意愿股数按板块整手规则**向下取整**，返回 0 表示不足一手。"""
+    return round_lot_down(volume, board_of(instrument))
 
 
 # ---------------------------------------------------------------------------
@@ -382,9 +368,6 @@ def _affordable_volume(
 
 
 __all__ = [
-    "KCB_LOT_STEP",
-    "KCB_MIN_BUY_VOLUME",
-    "MAIN_LOT_SIZE",
     "PRICE_EPSILON",
     "Broker",
     "ExecutionReport",
