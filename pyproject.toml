@@ -5,6 +5,8 @@ description = "ASTER 量化执行层（Python）"
 requires-python = ">=3.12"
 dependencies = [
     "akshare==1.18.97",
+    "autogluon>=1.6.3",
+    "cvxpy>=1.9.3",
     "polars>=1.0",
 ]
 
