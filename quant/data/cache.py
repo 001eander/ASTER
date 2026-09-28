@@ -20,10 +20,10 @@
 
 设计取舍
 --------
-- 每只票抓完立即合并写盘并落一次账本，进程被杀后重跑只补缺口。代价是
-  ``bars/YYYY.parquet`` 每年一个整体文件，逐票合并会反复读写该文件；全市场
-  首抓的写放大明显，换来的是任意时刻中断都可续传。
-- 断点状态以账本为准：``last_date`` 是已落盘数据在该票上的最大日期，它不是
+- 每只票抓完立即记账，日线数据按 ``BARS_FLUSH_EVERY`` 只批量合并写盘，
+  避免逐票重写年份文件的写放大。落盘顺序为先 parquet 后账本：崩溃后账本
+  落后于 parquet，重跑补抓时 ``unique(keep="last")`` 保证幂等。
+- 断点状态以账本为准：``last_date`` 是已确认落盘数据在该票上的最大日期，它不是
   ``end`` 时只补 ``[last_date + 1, end]``，从头重抓的只有账本里无记录的票。
 - 公司行为接口逐票抓取，本模块按 ``CA_BATCH_SIZE`` 分批调用数据源以摊薄账本
   写入，批次内成功整批记账；数据源对单票失败的 log+skip 无法区分「无分红」与
@@ -75,6 +75,9 @@ MANIFEST_FILE: str = "_manifest.json"
 CA_BATCH_SIZE: int = 200
 #: ``update_daily`` 中无 ``last_date`` 的失败票重试窗口（天）。
 FAILED_RETRY_LOOKBACK_DAYS: int = 30
+#: 日线合并写盘的批大小：累积若干只票再一次合并进年份文件，避免逐票整文件
+#: 重写带来的写放大。崩溃后账本落后于 parquet，重抓时 unique 去重保证幂等。
+BARS_FLUSH_EVERY: int = 100
 
 #: 账本里 bars 条目的状态取值。
 STATUS_OK: str = "ok"
@@ -317,52 +320,75 @@ def _fetch_bars(
 ) -> None:
     entries = _bar_entries(manifest)
     total = len(instruments)
+    buffer: list[pl.DataFrame] = []
+    pending: list[str] = []
+
+    def flush() -> None:
+        """合并缓冲区进年份文件，然后落账（顺序保证崩溃后可幂等重抓）。"""
+        if buffer:
+            _merge_daily_bars(data_dir, pl.concat(buffer, how="vertical_relaxed"))
+            buffer.clear()
+        if pending:
+            _save_manifest(data_dir, manifest)
+            pending.clear()
+
     for done, instrument in enumerate(instruments, start=1):
-        plan = _bar_plan(entries.get(instrument), start, end, no_last_date_start)
-        if plan is None:
-            report.skipped += 1
-            _emit(progress, done, total, instrument)
-            continue
-        fetch_start, fetch_end = plan
         try:
-            frame = _normalize_bars(
-                source.daily_bars([instrument], fetch_start, fetch_end)
-            )
-        except Exception as exc:  # noqa: BLE001 - 单票失败不影响整批
-            previous = entries.get(instrument, {})
-            entries[instrument] = {
-                "last_date": previous.get("last_date"),
-                "rows": int(previous.get("rows") or 0),
-                "status": STATUS_FAILED,
-                "error": str(exc)[:500],
-            }
-            report.failed += 1
-            report.failures[instrument] = str(exc)
-            logger.warning("抓取 %s 日线失败：%s", instrument, exc)
-        else:
-            if frame.height:
-                _merge_daily_bars(data_dir, frame)
-                new_rows = frame.select(["instrument", "date"]).unique().height
-                previous = entries.get(instrument, {})
-                entries[instrument] = {
-                    "last_date": _dump_date(frame["date"].max()),
-                    "rows": int(previous.get("rows") or 0) + new_rows,
-                    "status": STATUS_OK,
-                    "error": None,
-                }
-                report.ok += 1
-            else:
+            plan = _bar_plan(entries.get(instrument), start, end, no_last_date_start)
+            if plan is None:
+                report.skipped += 1
+                _emit(progress, done, total, instrument)
+                continue
+            fetch_start, fetch_end = plan
+            try:
+                frame = _normalize_bars(
+                    source.daily_bars([instrument], fetch_start, fetch_end)
+                )
+            except Exception as exc:  # noqa: BLE001 - 单票失败不影响整批
                 previous = entries.get(instrument, {})
                 entries[instrument] = {
                     "last_date": previous.get("last_date"),
                     "rows": int(previous.get("rows") or 0),
-                    "status": STATUS_EMPTY,
-                    "error": None,
+                    "status": STATUS_FAILED,
+                    "error": str(exc)[:500],
                 }
-                report.empty += 1
-        # 逐票落账：进程被杀后重跑能续。
-        _save_manifest(data_dir, manifest)
-        _emit(progress, done, total, instrument)
+                report.failed += 1
+                report.failures[instrument] = str(exc)
+                logger.warning("抓取 %s 日线失败：%s", instrument, exc)
+                pending.append(instrument)
+            else:
+                if frame.height:
+                    buffer.append(frame)
+                    new_rows = frame.select(["instrument", "date"]).unique().height
+                    previous = entries.get(instrument, {})
+                    entries[instrument] = {
+                        "last_date": _dump_date(frame["date"].max()),
+                        "rows": int(previous.get("rows") or 0) + new_rows,
+                        "status": STATUS_OK,
+                        "error": None,
+                    }
+                    report.ok += 1
+                else:
+                    previous = entries.get(instrument, {})
+                    entries[instrument] = {
+                        "last_date": previous.get("last_date"),
+                        "rows": int(previous.get("rows") or 0),
+                        "status": STATUS_EMPTY,
+                        "error": None,
+                    }
+                    report.empty += 1
+                pending.append(instrument)
+            if len(pending) >= BARS_FLUSH_EVERY:
+                flush()
+            _emit(progress, done, total, instrument)
+        except BaseException:
+            # 中断/异常退出前尽量落盘，保住已完成的进度。
+            try:
+                flush()
+            except Exception:  # noqa: BLE001 - 清理失败不掩盖原异常
+                logger.exception("中断清理落盘失败")
+            raise
+    flush()
 
 
 def _fetch_corporate_actions(
