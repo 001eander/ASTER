@@ -82,6 +82,9 @@ RETRY_TIMES: int = 3
 RETRY_BASE_DELAY_SECONDS: float = 1.0
 #: 东方财富成交量单位「手」换算为「股」的系数。
 EM_VOLUME_LOT_SIZE: float = 100.0
+#: 东财行情连续失败达到该次数后，本实例后续请求跳过东财直连（熔断）。
+#: 网络层故障（如 IP 被 RST）下避免每只股票白付 6 次重试的耗时。
+EM_CIRCUIT_THRESHOLD: int = 5
 #: akshare 日期参数格式。
 DATE_FORMAT: str = "%Y%m%d"
 #: 腾讯接口起始年份的兜底值，用于绕过 akshare 的 ``qfqday`` bug。
@@ -240,7 +243,15 @@ def _normalize_silent(code: str) -> str | None:
 
 
 class AkshareSource:
-    """akshare 数据源，满足 ``quant.data.source.base.DataSource`` 协议。"""
+    """akshare 数据源，满足 ``quant.data.source.base.DataSource`` 协议。
+
+    实例带东财熔断状态：``_fetch_daily_em`` 连续抛异常达到
+    ``EM_CIRCUIT_THRESHOLD`` 次后，本实例后续日线请求直连回退源，
+    东财恢复前不再逐票重试。返回空数据（如退市票无记录）不计入失败。
+    """
+
+    def __init__(self) -> None:
+        self._em_consecutive_failures: int = 0
 
     # ------------------------------------------------------------------
     # 日线
@@ -269,22 +280,36 @@ class AkshareSource:
         self, instrument: str, start: date, end: date
     ) -> pl.DataFrame | None:
         digits, exchange = instrument.split(".")
-        fetchers: list[Callable[[str, str, date, date], pl.DataFrame | None]] = [
-            self._fetch_daily_em
-        ]
-        if exchange in ("SH", "SZ"):
-            fetchers.append(self._fetch_daily_sina)
-        else:
-            fetchers.append(self._fetch_daily_tx)
-        for fetch in fetchers:
+        frame: pl.DataFrame | None = None
+        if self._em_consecutive_failures < EM_CIRCUIT_THRESHOLD:
             try:
-                frame = fetch(instrument, digits, start, end)
+                frame = self._fetch_daily_em(instrument, digits, start, end)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("%s 抓取 %s 失败：%s", fetch.__name__, instrument, exc)
-                continue
-            if frame is not None and frame.height:
-                return frame
-        return None
+                self._em_consecutive_failures += 1
+                logger.warning(
+                    "东财抓取 %s 失败（连续 %d 次）：%s",
+                    instrument,
+                    self._em_consecutive_failures,
+                    exc,
+                )
+                if self._em_consecutive_failures == EM_CIRCUIT_THRESHOLD:
+                    logger.warning(
+                        "东财连续失败 %d 次，本实例后续日线改走回退源",
+                        EM_CIRCUIT_THRESHOLD,
+                    )
+            else:
+                self._em_consecutive_failures = 0
+        if frame is not None and frame.height:
+            return frame
+        fallback = (
+            self._fetch_daily_sina if exchange in ("SH", "SZ") else self._fetch_daily_tx
+        )
+        try:
+            frame = fallback(instrument, digits, start, end)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s 抓取 %s 失败：%s", fallback.__name__, instrument, exc)
+            return None
+        return frame if frame is not None and frame.height else None
 
     def _fetch_daily_em(
         self, instrument: str, digits: str, start: date, end: date
