@@ -361,6 +361,7 @@ dependencies = [
     { name = "autogluon" },
     { name = "cvxpy" },
     { name = "polars" },
+    { name = "pyarrow" },
 ]
 
 [package.dev-dependencies]
@@ -374,6 +375,7 @@ requires-dist = [
     { name = "autogluon", specifier = ">=1.6.3" },
     { name = "cvxpy", specifier = ">=1.9.3" },
     { name = "polars", specifier = ">=1.0" },
+    { name = "pyarrow", specifier = ">=24.0.0" },
 ]
 
 [package.metadata.requires-dev]

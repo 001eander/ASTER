@@ -8,6 +8,7 @@ dependencies = [
     "autogluon>=1.6.3",
     "cvxpy>=1.9.3",
     "polars>=1.0",
+    "pyarrow>=24.0.0",
 ]
 
 [dependency-groups]
@@ -21,3 +22,8 @@ package = false
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+# 默认跳过真实训练；单独跑：uv run pytest -m slow
+addopts = '-m "not slow"'
+markers = [
+    "slow: 触发真实 AutoGluon 训练，默认跳过",
+]
