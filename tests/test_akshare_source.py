@@ -512,3 +512,77 @@ def test_retry_exhausted_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_satisfies_protocol() -> None:
     assert isinstance(AkshareSource(), DataSource)
+# ---------------------------------------------------------------------------
+# 东财熔断
+# ---------------------------------------------------------------------------
+
+
+def _sina_raw() -> object:
+    return _pandas(
+        pl.DataFrame(
+            {
+                "date": [dt.date(2026, 9, 1)],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.0],
+                "close": [10.5],
+                "volume": [1000.0],
+                "amount": [10_500.0],
+            }
+        )
+    )
+
+
+def _sina_factor() -> object:
+    return _pandas(
+        pl.DataFrame(
+            {"date": [dt.date(2026, 9, 1)], "hfq_factor": [2.0]}
+        )
+    )
+
+
+def test_em_circuit_breaker_skips_em_after_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    em_calls = {"n": 0}
+
+    def counting_boom(**_kw: object) -> object:
+        em_calls["n"] += 1
+        raise RuntimeError("东财不可用")
+
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", counting_boom)
+    monkeypatch.setattr(
+        ak_source.ak,
+        "stock_zh_a_daily",
+        lambda **kw: _sina_factor() if kw.get("adjust") == "hfq-factor" else _sina_raw(),
+    )
+
+    source = AkshareSource()
+    instruments = [f"60000{i}.SH" for i in range(8)]
+    out = source.daily_bars(instruments, dt.date(2026, 9, 1), dt.date(2026, 9, 1))
+
+    assert out.height == 8
+    # 熔断后不再请求东财：底层调用数 = 阈值 × 单票重试次数，而不是逐票持续请求
+    assert em_calls["n"] == ak_source.EM_CIRCUIT_THRESHOLD * ak_source.RETRY_TIMES
+    assert source._em_consecutive_failures == ak_source.EM_CIRCUIT_THRESHOLD
+
+
+def test_em_circuit_breaker_resets_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    em_calls = {"n": 0}
+
+    def flaky_em(**kw: object) -> object:
+        em_calls["n"] += 1
+        if em_calls["n"] <= 2:
+            raise RuntimeError("东财抖动")
+        return _em_raw() if kw["adjust"] == "" else _em_hfq()
+
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", flaky_em)
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_daily", _raise)
+
+    source = AkshareSource()
+    instruments = [f"60000{i}.SH" for i in range(3)]
+    out = source.daily_bars(instruments, dt.date(2026, 9, 1), dt.date(2026, 9, 2))
+
+    # 前两只走回退，第三只东财恢复后直连成功，熔断计数复位
+    assert source._em_consecutive_failures == 0
+    assert out.filter(pl.col("instrument") == "600002.SH").height == 2
