@@ -12,13 +12,13 @@ A 股日频量化系统：Agent 挖因子 + AutoML 合成信号 + 凸优化组�
 
 ## 技术栈
 
-Python：polars（禁用 pandas）、cvxpy、LightGBM、akshare（锁版本）、pytest、uv。
+Python：polars（禁用 pandas）、cvxpy、AutoGluon（GPU 加速，本机有显卡）、akshare（锁版本）、pytest、uv。
 TS：Node ≥ 20、vitest、strict。
 红线：不引入 Qlib；数据源只用 akshare。
 
 ## 流程
 
-- Issue 驱动（M0–M4 共 37 个），动手前把 issue 移到 In Progress。
+- Issue 驱动（M0–M5 共 39 个），动手前把 issue 移到 In Progress。
 - 分支命名 `issue号-简述`，一个 PR 关一个 issue，描述写 `Closes #N`。
 - Milestone 按 DoD 验收后打 tag（`m0`、`m1`…）。
 - M0→M3 严格按序，M4 可与 M3 并行。
