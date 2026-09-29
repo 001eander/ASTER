@@ -1,7 +1,12 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ExperienceBank, type ExperienceRecord, type Score } from "./experience-bank.js";
-import { InspirationQueue, type Inspiration } from "./inspiration-queue.js";
+import {
+  DEFAULT_DIRECTION_QUOTA,
+  InspirationQueue,
+  normalizeDirection,
+  type Inspiration,
+} from "./inspiration-queue.js";
 import { writeJsonFile } from "./json-file.js";
 import { DEFAULT_PROPOSAL_REWRITES, needsProposalRewrite } from "./proposal-rewrite.js";
 import { ResourceGates } from "./resource-gates.js";
@@ -19,6 +24,8 @@ export type ContextPort = {
     best?: ExperienceRecord;
     records: ExperienceRecord[];
     takenDirections: string[];
+    // 上一轮被方向配额挡下的方向：不算用过，名额空出后可以再交。
+    deferredDirections: string[];
   }): Promise<{ inspirations?: ContextDraft[]; stop?: boolean }>;
 };
 
@@ -65,6 +72,8 @@ export type LoopOptions = {
   maxSandboxes: number;
   lowWater: number;
   highWater: number;
+  // 同一方向组（「信号源：」前缀相同）的并发灵感上限，缺省 DEFAULT_DIRECTION_QUOTA。
+  directionQuota?: number;
   budget: { maxSolutions?: number; maxMs?: number };
   context: ContextPort;
   proposal: ProposalPort;
@@ -87,6 +96,7 @@ export async function runInnerLoop(opts: LoopOptions): Promise<LoopResult> {
         maxSandboxes: opts.maxSandboxes,
         lowWater: opts.lowWater,
         highWater: opts.highWater,
+        directionQuota: opts.directionQuota ?? DEFAULT_DIRECTION_QUOTA,
         maxSolutions: opts.budget.maxSolutions,
         maxMs: opts.budget.maxMs,
         proposalRewrites: opts.proposalRewrites ?? DEFAULT_PROPOSAL_REWRITES,
@@ -102,6 +112,7 @@ export async function runInnerLoop(opts: LoopOptions): Promise<LoopResult> {
   const queue = await InspirationQueue.open(opts.runDir, {
     lowWater: opts.lowWater,
     highWater: opts.highWater,
+    directionQuota: opts.directionQuota,
     knownIds: [...committed],
   });
   await queue.requeueOrphans(committed);
@@ -123,6 +134,8 @@ export async function runInnerLoop(opts: LoopOptions): Promise<LoopResult> {
   const jobs = new Set<Promise<void>>();
   let stopRequested = false;
   let stopReason: StopReason | undefined;
+  // 被方向配额挡下的 direction：短暂饱和而已，交回 Context 等名额空出再提。
+  const deferredDirections = new Set<string>();
 
   const consumedNow = () => consumedBefore + Math.max(0, now() - sessionStartedAt);
 
@@ -269,13 +282,18 @@ export async function runInnerLoop(opts: LoopOptions): Promise<LoopResult> {
         live.contextRunning = true;
         await persist();
         try {
+          const taken = queue.takenDirections();
+          const takenSet = new Set(taken);
           const out = await opts.context.produce({
             generation: bank.generation(),
             needsMore: queue.needsMore(),
             mustStopProducing: queue.mustStopProducing(),
             best: await bank.best(),
             records: await bank.list(),
-            takenDirections: queue.takenDirections(),
+            takenDirections: taken,
+            deferredDirections: [...deferredDirections].filter(
+              (direction) => !takenSet.has(normalizeDirection(direction)),
+            ),
           });
           if (out.stop) stopRequested = true;
           let added = 0;
@@ -287,6 +305,7 @@ export async function runInnerLoop(opts: LoopOptions): Promise<LoopResult> {
               ebGeneration: bank.generation(),
             });
             if (put.ok) added += 1;
+            else if (put.reason === "quota") deferredDirections.add(draft.direction);
           }
           if (
             added === 0 &&
