@@ -125,6 +125,7 @@ from quant.eval.metrics import (  # noqa: E402
 )
 from quant.labels.open_to_open import DEFAULT_HORIZON  # noqa: E402
 from quant.portfolio.enhanced import (  # noqa: E402
+    FINAL_TIER_FLAG,
     STATUS_HELD,
     STATUS_RELAXED,
     EnhancedOptimizer,
@@ -317,15 +318,22 @@ class SignalStats:
 
 
 #: 指增逐日优化日志 schema（``enhanced_log.parquet``）。
+#:
+#: 口径：``cover_rate`` / ``max_band_dev`` 等暴露量都按**归一后的当日持仓**计算
+#: （求解日 = 优化目标权重，held 日 = 漂移后持仓的归一权重），因此可以逐日横向比较；
+#: ``invested_ratio`` 单独记实际账户在信号日的已投资比例（市值 / nav），用于分辨
+#: 「组合偏离基准」与「现金没投出去」两类问题。
 ENHANCED_LOG_SCHEMA: pl.Schema = pl.Schema(
     {
         "date": pl.Date,
         "status": pl.String,
         "relax_rounds": pl.Int64,
+        "final_turnover_free": pl.Boolean,
         "turnover": pl.Float64,
         "n_bench": pl.Int64,
         "n_bench_candidates": pl.Int64,
         "n_candidates": pl.Int64,
+        "invested_ratio": pl.Float64,
         "cover_rate": pl.Float64,
         "max_band_dev": pl.Float64,
         "band_violations": pl.Int64,
@@ -345,6 +353,7 @@ class EnhancedStats:
     rebalance_days: int = 0
     non_rebalance_days: int = 0
     held_days: int = 0
+    final_tier_days: int = 0
     relax_rounds: Counter[int] = field(default_factory=Counter)
     cover_rate_min: float | None = None
     cover_rate_min_date: date | None = None
@@ -719,6 +728,11 @@ def make_enhanced_signal_fn(
     候选 = 基准成分（PIT 权重）∪ 打分 top-K ∪ 当前持仓；非调仓日直接保持持仓（引擎
     按市值自然漂移权重）。行业 / 流通市值 / 六风格在各日按 cutoff 截取，风格与市值
     全窗口只算一次，避免逐日重算。
+
+    核对口径：逐日日志的覆盖度 / 个股带偏离按**归一后的当日持仓**计算——求解日取优化
+    目标权重，``held`` 日取漂移后持仓的归一权重（``EnhancedOptimizer.optimize_day``
+    内部统一）。实际已投资比例单列 ``invested_ratio``，避免把「组合偏离基准」与
+    「现金没投出去」混为一谈。
     """
     benchmark = strategy_config.benchmark
     if benchmark is None:
@@ -790,6 +804,7 @@ def make_enhanced_signal_fn(
             stats.hold_fallback += 1
             enhanced.add_note(f"{day.isoformat()}: nav 非正，保持现状")
             return []
+        invested_ratio = account.market_value(prices) / nav
 
         candidate_set = set(candidates)
         current_weights = {
@@ -836,7 +851,10 @@ def make_enhanced_signal_fn(
             outcome.exposures
         )
         cover_rate = float(outcome.exposures.get("cover_rate", 0.0))
+        final_tier = bool(outcome.thresholds.get(FINAL_TIER_FLAG, False))
         enhanced.relax_rounds[int(outcome.relax_rounds)] += 1
+        if final_tier:
+            enhanced.final_tier_days += 1
         if band_dev >= enhanced.max_band_dev:
             enhanced.max_band_dev = band_dev
             enhanced.max_band_dev_date = day
@@ -849,10 +867,12 @@ def make_enhanced_signal_fn(
                 "date": day,
                 "status": str(outcome.status),
                 "relax_rounds": int(outcome.relax_rounds),
+                "final_turnover_free": final_tier,
                 "turnover": float(outcome.turnover),
                 "n_bench": len(bench),
                 "n_bench_candidates": len(bench_candidates),
                 "n_candidates": len(candidates),
+                "invested_ratio": float(invested_ratio),
                 "cover_rate": cover_rate,
                 "max_band_dev": band_dev,
                 "band_violations": band_violations,
@@ -864,6 +884,10 @@ def make_enhanced_signal_fn(
             }
         )
 
+        if final_tier:
+            enhanced.add_note(
+                f"{day.isoformat()}: 常规放松用尽，终局台阶取消换手约束后求解成功"
+            )
         if band_violations:
             enhanced.add_note(
                 f"{day.isoformat()}: 个股带超带 {band_violations} 只，最大偏离 {band_dev:.6f}"
@@ -1465,6 +1489,7 @@ def _render_enhanced_rows(
         f"- 调仓日 / 非调仓日：{enhanced.rebalance_days} / {enhanced.non_rebalance_days}"
     )
     lines.append(f"- 优化失败保持持仓日数：{enhanced.held_days}")
+    lines.append(f"- 终局台阶触发日数（取消换手约束后求解成功）：{enhanced.final_tier_days}")
     lines.append(f"- 基准权重缺失日数：{enhanced.bench_missing_days}")
     rounds = "、".join(
         f"{count} 轮 {days} 日" for count, days in sorted(enhanced.relax_rounds.items())
@@ -1484,6 +1509,10 @@ def _render_enhanced_rows(
     lines.append(f"- 个股带超带累计只次数：{enhanced.band_violations}")
     lines.append(
         f"- 行业快照退化日数（无 PIT 快照，退化到最新一份）：{enhanced.industry_fallback_days}"
+    )
+    lines.append(
+        "- 口径：覆盖度 / 带偏离按**归一后的当日持仓**计（求解日 = 目标权重，held 日 = 漂移后持仓），"
+        "`enhanced_log.parquet` 另记 `invested_ratio`（实际已投资比例）。"
     )
     lines.append("")
     if enhanced.notes:
@@ -1918,6 +1947,7 @@ def _print_summary(result: E2EResult) -> None:
         )
         print(
             f"指增：调仓 {stats.rebalance_days} 日，保持持仓 {stats.held_days} 日，"
+            f"终局台阶 {stats.final_tier_days} 日，"
             f"最小覆盖度 {cover}，个股带最大偏离 {stats.max_band_dev:.6f}"
             f"（超带 {stats.band_violations} 只次），行业快照退化 {stats.industry_fallback_days} 日"
         )
