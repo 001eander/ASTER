@@ -19,6 +19,7 @@ from quant.data.schema import DAILY_BARS
 from quant.eval import factor as factor_module
 from quant.eval.factor import (
     ICIR_MIN,
+    MAX_CORR_REJECT,
     MONO_MIN,
     RANK_IC_MIN,
     FactorEvaluation,
@@ -26,6 +27,7 @@ from quant.eval.factor import (
     main,
 )
 from quant.factor_api.truncation import TruncationResult
+from quant.factor_lib.correlation import CorrelationReport
 
 # ---------------------------------------------------------------------------
 # 合成数据
@@ -121,6 +123,47 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 '''
 
 
+#: 库因子：与 GOOD_FACTOR 同源（vwap），用于触发正相关查重。
+LIB_DUP_FACTOR_SRC: str = '''
+"""测试库因子：当日 vwap，与待查因子完全同源。"""
+from __future__ import annotations
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    return data.select("date", "instrument", pl.col("vwap").alias("value"))
+'''
+
+#: 库因子：-vwap，与待查因子完全负相关。
+LIB_NEG_FACTOR_SRC: str = '''
+"""测试库因子：-vwap，与待查因子完全负相关。"""
+from __future__ import annotations
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    return data.select("date", "instrument", (-pl.col("vwap")).alias("value"))
+'''
+
+#: 库因子：仅按证券序号取值，时不变，与日内 vwap 噪声近似不相关。
+LIB_NOISE_FACTOR_SRC: str = '''
+"""测试库因子：证券序号，时不变，近似独立于日内信号。"""
+from __future__ import annotations
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    return data.select(
+        "date",
+        "instrument",
+        pl.col("instrument").str.slice(0, 6).cast(pl.Int64).alias("value"),
+    )
+'''
+
+
 def _instrument(index: int) -> str:
     """生成形如 ``600000.SH`` 的证券代码。"""
     return f"{600000 + index:06d}.SH"
@@ -183,6 +226,36 @@ def _write(tmp_path: Path, source: str, name: str = "factor") -> Path:
     return path
 
 
+def _write_library(root: Path, sources: dict[str, str]) -> Path:
+    """在 ``root`` 下写若干因子与一份 registry.json，返回目录。
+
+    ``code_path`` 相对仓库根（即 ``root`` 的父目录）书写，与真实因子库一致。
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    entries: list[dict[str, object]] = []
+    for factor_id, source in sources.items():
+        (root / f"{factor_id}.py").write_text(source, encoding="utf-8")
+        entries.append(
+            {
+                "factor_id": factor_id,
+                "hypothesis": f"{factor_id} 测试库因子",
+                "code_path": f"{root.name}/{factor_id}.py",
+                "metrics": {"rank_ic": None, "icir": None, "max_corr": None},
+                "direction": {
+                    "signal_source": "price",
+                    "time_scale": "short",
+                    "mechanism": "momentum",
+                },
+                "lineage": {"op": "seed", "parents": [], "run_id": None, "generation": 0},
+                "status": "pool",
+            }
+        )
+    (root / "registry.json").write_text(
+        json.dumps({"version": 1, "factors": entries}), encoding="utf-8"
+    )
+    return root
+
+
 # ---------------------------------------------------------------------------
 # 管线各阶段
 # ---------------------------------------------------------------------------
@@ -216,6 +289,120 @@ class TestGatePass:
         assert result.stage == "done"
         assert result.gate_passed is False
         assert result.metrics["rank_ic_mean"] < 0.0
+
+
+class TestCorrelationGate:
+    """行为相关性查重接入评估管线：门控拒绝与 max_corr 落盘。"""
+
+    def test_duplicate_library_factor_is_rejected(self, tmp_path: Path) -> None:
+        data = _make_bars()
+        library = _write_library(tmp_path / "lib_dup", {"dup": LIB_DUP_FACTOR_SRC})
+
+        result = evaluate_factor(
+            _write(tmp_path, GOOD_FACTOR_SRC), data, factor_library_dir=library
+        )
+
+        assert result.ok is True
+        assert result.stage == "done"
+        # IC 门控本身通过，被拒只因行为相关性判冗余。
+        assert result.metrics["rank_ic_mean"] >= RANK_IC_MIN
+        assert result.metrics["max_corr"] == pytest.approx(1.0, abs=1e-9)
+        assert result.gate_passed is False
+
+    def test_negative_correlation_is_rejected_by_absolute_value(
+        self, tmp_path: Path
+    ) -> None:
+        data = _make_bars()
+        library = _write_library(tmp_path / "lib_neg", {"neg": LIB_NEG_FACTOR_SRC})
+
+        result = evaluate_factor(
+            _write(tmp_path, GOOD_FACTOR_SRC), data, factor_library_dir=library
+        )
+
+        assert result.ok is True
+        assert result.metrics["max_corr"] == pytest.approx(1.0, abs=1e-9)
+        assert result.gate_passed is False
+
+    def test_uncorrelated_library_factor_passes(self, tmp_path: Path) -> None:
+        data = _make_bars()
+        library = _write_library(tmp_path / "lib_noise", {"noise": LIB_NOISE_FACTOR_SRC})
+
+        result = evaluate_factor(
+            _write(tmp_path, GOOD_FACTOR_SRC), data, factor_library_dir=library
+        )
+
+        assert result.ok is True
+        assert result.metrics["max_corr"] is not None
+        assert result.metrics["max_corr"] < MAX_CORR_REJECT
+        assert result.gate_passed is True
+
+    def test_missing_registry_skips_correlation(self, tmp_path: Path) -> None:
+        data = _make_bars()
+
+        result = evaluate_factor(
+            _write(tmp_path, GOOD_FACTOR_SRC),
+            data,
+            factor_library_dir=tmp_path / "lib_absent",
+        )
+
+        assert result.ok is True
+        assert result.metrics["max_corr"] is None
+        assert result.gate_passed is True
+
+    def test_empty_registry_skips_correlation(self, tmp_path: Path) -> None:
+        data = _make_bars()
+        library = _write_library(tmp_path / "lib_empty", {})
+
+        result = evaluate_factor(
+            _write(tmp_path, GOOD_FACTOR_SRC), data, factor_library_dir=library
+        )
+
+        assert result.ok is True
+        assert result.metrics["max_corr"] is None
+        assert result.gate_passed is True
+
+    def test_no_library_dir_max_corr_is_none(self, tmp_path: Path) -> None:
+        data = _make_bars()
+
+        result = evaluate_factor(_write(tmp_path, GOOD_FACTOR_SRC), data)
+
+        assert result.metrics["max_corr"] is None
+        assert result.gate_passed is True
+
+    @pytest.mark.parametrize(
+        ("max_corr", "expected_gate"),
+        [
+            (0.699999, True),
+            (MAX_CORR_REJECT, True),
+            (MAX_CORR_REJECT + 1e-6, False),
+        ],
+    )
+    def test_threshold_boundary(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        max_corr: float,
+        expected_gate: bool,
+    ) -> None:
+        data = _make_bars()
+        dummy = pl.DataFrame({"date": [dt.date(2024, 1, 1)], "value": [1.0]})
+        monkeypatch.setattr(
+            factor_module, "load_library_values", lambda *args, **kwargs: {"stub": dummy}
+        )
+        monkeypatch.setattr(
+            factor_module,
+            "max_library_corr",
+            lambda *args, **kwargs: CorrelationReport({"stub": max_corr}, max_corr),
+        )
+
+        result = evaluate_factor(
+            _write(tmp_path, GOOD_FACTOR_SRC),
+            data,
+            factor_library_dir=tmp_path,
+        )
+
+        assert result.metrics["max_corr"] == max_corr
+        assert result.gate_passed is expected_gate
 
 
 class TestHardFailures:
@@ -318,7 +505,15 @@ class TestCli:
         out_path = tmp_path / "score.json"
 
         code = main(
-            [str(factor_path), "--data-dir", str(tmp_path), "--out", str(out_path)]
+            [
+                str(factor_path),
+                "--data-dir",
+                str(tmp_path),
+                "--factor-library-dir",
+                str(tmp_path / "no_lib"),
+                "--out",
+                str(out_path),
+            ]
         )
 
         assert code == 0
@@ -336,7 +531,10 @@ class TestCli:
             "n_days",
             "mono",
             "turnover_mean",
+            "max_corr",
         }
+        assert metrics["max_corr"] is None
+        assert "max_corr=n/a" in payload["notes"]
         assert payload["details"]["truncation"]["ok"] is True
 
     def test_cli_reversed_factor_writes_negative_score(
@@ -348,7 +546,15 @@ class TestCli:
         out_path = tmp_path / "score.json"
 
         code = main(
-            [str(factor_path), "--data-dir", str(tmp_path), "--out", str(out_path)]
+            [
+                str(factor_path),
+                "--data-dir",
+                str(tmp_path),
+                "--factor-library-dir",
+                str(tmp_path / "no_lib"),
+                "--out",
+                str(out_path),
+            ]
         )
 
         assert code == 0
@@ -356,6 +562,33 @@ class TestCli:
         assert payload["score"] < 0.0
         assert payload["details"]["gate_passed"] is False
         assert "未过门控" in payload["notes"]
+
+    def test_cli_wires_factor_library_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data = _make_bars()
+        monkeypatch.setattr(factor_module, "load_bars", lambda *args, **kwargs: data)
+        library = _write_library(tmp_path / "lib_dup", {"dup": LIB_DUP_FACTOR_SRC})
+        factor_path = _write(tmp_path, GOOD_FACTOR_SRC)
+        out_path = tmp_path / "score.json"
+
+        code = main(
+            [
+                str(factor_path),
+                "--data-dir",
+                str(tmp_path),
+                "--factor-library-dir",
+                str(library),
+                "--out",
+                str(out_path),
+            ]
+        )
+
+        assert code == 0
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        assert payload["details"]["metrics"]["max_corr"] == pytest.approx(1.0, abs=1e-9)
+        assert payload["details"]["gate_passed"] is False
+        assert "max_corr=1.00" in payload["notes"]
 
     def test_cli_hard_failure_writes_no_score(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -366,7 +599,15 @@ class TestCli:
         out_path = tmp_path / "score.json"
 
         code = main(
-            [str(factor_path), "--data-dir", str(tmp_path), "--out", str(out_path)]
+            [
+                str(factor_path),
+                "--data-dir",
+                str(tmp_path),
+                "--factor-library-dir",
+                str(tmp_path / "no_lib"),
+                "--out",
+                str(out_path),
+            ]
         )
 
         assert code == 1
