@@ -2,6 +2,7 @@
 name = "aster-quant"
 version = "0.1.0"
 description = "ASTER 量化执行层（Python）"
+license = "GPL-2.0-only"
 requires-python = ">=3.12"
 dependencies = [
     "akshare==1.18.97",
