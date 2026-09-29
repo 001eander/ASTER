@@ -1,7 +1,7 @@
 """CSMAR 取样变更表历史回填 CLI（issue #64 历史段）。
 
 以官方最新成分名单为基准，用 CSMAR 指数取样变更表逆放重建 2021-09 起的调样生效日
-成分快照，并用「等效市值加权」近似调样日权重锚；随后重建日频成分 / 权重表。
+成分快照，并按**流通市值加权**构造调样日权重锚；随后重建日频成分 / 权重表。
 
 流程::
 
@@ -9,18 +9,23 @@
     2. 以 ``data/index_member_snapshots.parquet`` 里各指数最新一份为基准逆放重建，
        正放回推做自洽校验（不变式不通过即中止）；
     3. 合并快照落盘（同 (指数, 生效日) 整份覆盖）；
-    4. 用 ``close × adjfactor`` 构造每个调样生效日的等效权重锚，与既有官方锚合并
+    4. 构造 / 复用个股流通市值表 ``data/float_mv.parquet``（CSMAR ``Dsmvosd``）；
+    5. 用调样生效日流通市值横截面归一构造权重锚，与既有官方锚合并
        （官方锚优先，整份覆盖同日权重）；
-    5. :func:`quant.data.index_members.build_daily_tables` 重建日频表；
-    6. 在官方锚日用同一等效口径重算并与官方权重对比，打印偏差中位数 / 90 分位 / 最大值。
+    6. :func:`quant.data.index_members.build_daily_tables` 重建日频表；
+    7. 在官方锚日用同一流通市值口径重算并与官方权重对比，打印偏差
+       中位数 / 90 分位 / 最大值。
 
 用法::
 
     uv run python scripts/backfill_index_history.py \\
-        --csmar-dir "C:\\Windows\\Temp\\opencode\\csmar-index"
+        --csmar-dir "C:\\Windows\\Temp\\opencode\\csmar-index" \\
+        --csmar-daily-dir "C:\\Windows\\Temp\\opencode\\csmar"
     uv run python scripts/backfill_index_history.py --csmar-dir <dir> --dry-run
 
-``--csmar-dir`` 可重复传入（CSMAR 分年度导出包各一个目录）。
+``--csmar-dir`` 可重复传入（取样变更分年度导出包各一个目录）。``--csmar-daily-dir``
+给定时从该目录的 ``TRD_Dalyr*.csv`` 重建流通市值表；省略则复用已有的
+``data/float_mv.parquet``。
 """
 from __future__ import annotations
 
@@ -35,10 +40,16 @@ import polars as pl
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from quant.data import cache  # noqa: E402
+from quant.data.float_mv import (  # noqa: E402
+    FLOAT_MV_FILE,
+    build_float_mv,
+    read_float_mv,
+    write_float_mv,
+)
 from quant.data.index_history import (  # noqa: E402
-    build_equivalent_anchors,
+    build_float_mv_anchors,
     check_reconstruction_invariant,
-    compare_equivalent_to_official,
+    compare_weights_to_official,
     csmar_change_files,
     read_csmar_changes,
     reconstruct_snapshots,
@@ -47,11 +58,11 @@ from quant.data.index_members import (  # noqa: E402
     INDEX_CODES,
     MEMBER_SNAPSHOTS_FILE,
     WEIGHT_ANCHORS_FILE,
+    build_daily_tables,
     merge_member_snapshots,
     merge_weight_anchors,
     read_anchor_weights,
     read_snapshots,
-    build_daily_tables,
 )
 from quant.data.schema import HISTORY_START  # noqa: E402
 
@@ -77,6 +88,12 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="DIR",
         help="CSMAR 取样变更表导出目录（可重复传入）",
+    )
+    parser.add_argument(
+        "--csmar-daily-dir",
+        default=None,
+        metavar="DIR",
+        help="CSMAR 日线导出目录（TRD_Dalyr*.csv），给定时重建 float_mv.parquet",
     )
     parser.add_argument("--end", type=_parse_date, default=None, help="结束日期，默认最新")
     parser.add_argument("--dry-run", action="store_true", help="只打印计划不执行")
@@ -123,9 +140,9 @@ def _summarize_anchors(anchors: pl.DataFrame) -> None:
 
 def _summarize_deviations(comparison: pl.DataFrame) -> None:
     if comparison.height == 0:
-        print("\n# 等效口径偏差披露：无官方锚可比")
+        print("\n# 流通市值口径偏差披露：无官方锚可比")
         return
-    print("\n# 等效市值口径 vs 官方锚 权重绝对偏差披露")
+    print("\n# 流通市值口径 vs 官方锚 权重绝对偏差披露")
     stats = (
         comparison.group_by("index_code")
         .agg(
@@ -167,6 +184,21 @@ def _summarize_deviations_by_date(comparison: pl.DataFrame) -> None:
         )
 
 
+def _summarize_anchor_outliers(comparison: pl.DataFrame, *, threshold: float = 5e-2) -> None:
+    """披露偏差超过 ``threshold`` 的票，供分析自由流通比例极低等情形。"""
+    if comparison.height == 0:
+        return
+    outliers = comparison.filter(pl.col("abs_deviation") > threshold).sort(
+        "abs_deviation", descending=True
+    )
+    print(f"\n# 偏差 > {threshold:.0e} 的票（{outliers.height} 条）")
+    for row in outliers.head(20).iter_rows(named=True):
+        print(
+            f"  {row['index_code']}@{row['anchor_date']} {row['instrument']}: "
+            f"流通市值 {row['float_mv_weight']:.4f} vs 官方 {row['official_weight']:.4f}"
+        )
+
+
 def _verify_daily_tables(data_dir: Path) -> None:
     members = pl.read_parquet(data_dir / "index_members.parquet")
     weights = pl.read_parquet(data_dir / "index_weights.parquet")
@@ -178,9 +210,7 @@ def _verify_daily_tables(data_dir: Path) -> None:
         f"权重和越界 (指数, 日) {bad.height} 个"
     )
     if weights.height:
-        print(
-            f"  权重和范围 {sums['s'].min():.6f} ~ {sums['s'].max():.6f}"
-        )
+        print(f"  权重和范围 {sums['s'].min():.6f} ~ {sums['s'].max():.6f}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -226,7 +256,9 @@ def main(argv: list[str] | None = None) -> int:
         print("\n# dry-run：解析与重建计划如下，不落盘")
         print(f"- 基准快照 {snapshots.height} 行")
         print(f"- 目标指数 {list(INDEX_CODES)}")
-        print("- 逆放重建 → 合并快照 → 等效权重锚 → 重建日频表")
+        source = args.csmar_daily_dir or f"已有 {data_dir / FLOAT_MV_FILE}"
+        print(f"- 流通市值表来源：{source}")
+        print("- 逆放重建 → 合并快照 → 流通市值权重锚 → 重建日频表")
         return 0
 
     reconstructed = reconstruct_snapshots(changes, snapshots, coverage_start=HISTORY_START)
@@ -238,19 +270,36 @@ def main(argv: list[str] | None = None) -> int:
     cache._atomic_write_parquet(data_dir / MEMBER_SNAPSHOTS_FILE, merged_snapshots)
     print(f"已写入 {data_dir / MEMBER_SNAPSHOTS_FILE}")
 
+    if args.csmar_daily_dir is not None:
+        float_mv = build_float_mv(args.csmar_daily_dir, start=HISTORY_START, end=args.end)
+        path = write_float_mv(data_dir, float_mv)
+        print(
+            f"\n# 流通市值表：{float_mv.height} 行 / "
+            f"{float_mv['instrument'].n_unique()} 只，"
+            f"{float_mv['date'].min()} ~ {float_mv['date'].max()}"
+        )
+        print(f"已写入 {path}")
+    else:
+        float_mv = read_float_mv(data_dir)
+        if float_mv.height == 0:
+            logger.error(
+                "缺少流通市值表 %s，用 --csmar-daily-dir 重建", data_dir / FLOAT_MV_FILE
+            )
+            return 2
+        print(
+            f"\n# 复用流通市值表 {float_mv.height} 行，"
+            f"{float_mv['date'].min()} ~ {float_mv['date'].max()}"
+        )
+
     calendar = cache.load_calendar(data_dir, end=args.end)
     open_days = [
         day
         for day in calendar.filter(pl.col("is_open"))["date"].to_list()
         if day >= HISTORY_START
     ]
-    instruments = merged_snapshots["instrument"].unique().to_list()
-    bars = cache.load_bars(
-        data_dir, instruments=instruments, start=HISTORY_START, end=args.end
-    )
-    approx, dropped = build_equivalent_anchors(merged_snapshots, bars, open_days)
+    approx, dropped = build_float_mv_anchors(merged_snapshots, float_mv, open_days)
     if dropped.height:
-        print(f"\n# 等效权重锚剔除无当日行情票 {dropped.height} 条")
+        print(f"\n# 流通市值权重锚剔除无当日市值票 {dropped.height} 条")
         for row in (
             dropped.group_by("index_code", "date")
             .agg(pl.len().alias("n"))
@@ -259,8 +308,16 @@ def main(argv: list[str] | None = None) -> int:
         ):
             print(f"  {row['index_code']}@{row['date']}: {row['n']} 票")
 
-    official = read_anchor_weights(data_dir)
+    # 既有锚文件里，落在重建锚日之外的才是官方锚（如中证月末权重）；同日的旧近似锚
+    # 必须让位给本次重建值，否则换口径后旧值会把新值覆盖回去。
+    existing = read_anchor_weights(data_dir)
+    approx_keys = approx.select("index_code", "date").unique()
+    official = existing.join(approx_keys, on=["index_code", "date"], how="anti")
     anchors = merge_weight_anchors(approx, official)
+    if official.height:
+        print(
+            f"\n# 保留既有官方锚 {official['date'].n_unique()} 个锚日 / {official.height} 行"
+        )
     _summarize_anchors(anchors)
     cache._atomic_write_parquet(data_dir / WEIGHT_ANCHORS_FILE, anchors)
     print(f"已写入 {data_dir / WEIGHT_ANCHORS_FILE}")
@@ -271,9 +328,10 @@ def main(argv: list[str] | None = None) -> int:
         f"对拍明细 {counts['drift_check']} 行"
     )
 
-    comparison = compare_equivalent_to_official(official, bars)
+    comparison = compare_weights_to_official(official, float_mv)
     _summarize_deviations(comparison)
     _summarize_deviations_by_date(comparison)
+    _summarize_anchor_outliers(comparison)
     _verify_daily_tables(data_dir)
     return 0
 

@@ -15,10 +15,12 @@
 - **生效日**：CSMAR ``Chgsmp01`` 变更日期即调样生效日；与
   :func:`quant.data.index_members.rebalance_effective_dates` 推定的定期窗口互验，
   不一致的记录属临时调样 / 剔除停牌票，快照照样落地。
-- **权重降级**：变更表无权重字段。锚日权重用**等效市值加权**近似——调样生效日
-  成分股 ``close × adjfactor`` 横截面归一。停牌 / 未上市票无当日报价，剔除后
-  重新归一，剔除清单单独返回。该口径与官方自由流通市值权重的偏差量级由
-  :func:`compare_equivalent_to_official` 在官方锚日披露。
+- **权重降级**：变更表无权重字段。锚日权重用**流通市值加权**近似——调样生效日
+  成分股按当日 CSMAR ``Dsmvosd``（日流通市值，千元）横截面归一。无市值数据的票
+  剔除后重新归一，剔除清单单独返回。该口径与官方自由流通市值权重的偏差量级由
+  :func:`compare_weights_to_official` 在官方锚日披露。
+- **市值表**：流通市值由 :mod:`quant.data.float_mv` 从 CSMAR ``TRD_Dalyr`` 提取并
+  落 ``data/float_mv.parquet``，本模块只消费该表。
 - CSMAR 代码列带前导零，CSV 统一 ``infer_schema_length=0`` 按字符串读取（与
   :mod:`quant.data.source.csmar` 同口径）。
 """
@@ -33,6 +35,7 @@ from typing import Sequence
 import polars as pl
 
 from quant.data.schema import (
+    FLOAT_MV,
     HISTORY_START,
     INDEX_CODES,
     INDEX_MEMBER_CHANGES,
@@ -270,57 +273,55 @@ def check_reconstruction_invariant(
                 )
 
 
-def market_cap_weights_on(
+def float_mv_weights_on(
     members: pl.DataFrame,
-    bars: pl.DataFrame,
+    float_mv: pl.DataFrame,
     day: date,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """单指数单日等效市值权重：``close × adjfactor`` 横截面归一。
+    """单指数单日流通市值权重：当日 ``Dsmvosd`` 横截面归一。
 
-    ``members`` 为含 ``instrument`` 列的当日成分名单，``bars`` 为 ``DAILY_BARS``。
-    当日报价缺失或非正的票剔除后重新归一。返回 ``(instrument, weight)`` 与剔除清单
-    （``instrument`` 单列）。全部票无有效报价时返回空权重表。
+    ``members`` 为含 ``instrument`` 列的当日成分名单，``float_mv`` 为 ``FLOAT_MV``
+    表。缺当日市值（停牌 / 未上市 / 市值非正）的票剔除后重新归一。返回
+    ``(instrument, weight)`` 与剔除清单（``instrument`` 单列）。全部票无有效市值时
+    返回空权重表。
     """
     empty_w = pl.DataFrame({"instrument": pl.String, "weight": pl.Float64})
     members = members.select("instrument").unique()
-    px = (
-        bars.filter(pl.col("date") == day)
-        .select("instrument", "close", "adjfactor")
-        .with_columns((pl.col("close") * pl.col("adjfactor")).alias("_px"))
-    )
-    joined = members.join(px, on="instrument", how="left")
-    valid = joined.filter(pl.col("_px").is_not_null() & (pl.col("_px") > 0))
+    mv = float_mv.filter(pl.col("date") == day).select("instrument", "float_mv")
+    joined = members.join(mv, on="instrument", how="left")
+    valid = joined.filter(pl.col("float_mv").is_not_null() & (pl.col("float_mv") > 0))
     dropped = (
-        joined.filter(pl.col("_px").is_null() | (pl.col("_px") <= 0))
+        joined.filter(pl.col("float_mv").is_null() | (pl.col("float_mv") <= 0))
         .select("instrument")
         .sort("instrument")
     )
     if valid.height == 0:
         return empty_w, dropped
-    total = valid["_px"].sum()
-    weights = valid.select("instrument", (pl.col("_px") / total).alias("weight"))
+    total = valid["float_mv"].sum()
+    weights = valid.select("instrument", (pl.col("float_mv") / total).alias("weight"))
     return weights, dropped
 
 
-def build_equivalent_anchors(
+def build_float_mv_anchors(
     snapshots: pl.DataFrame,
-    bars: pl.DataFrame,
+    float_mv: pl.DataFrame,
     open_days: Sequence[date],
     *,
     index_codes: tuple[str, ...] = INDEX_CODES,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """由历史成分快照构造每个调样生效日的等效市值权重锚。
+    """由历史成分快照构造每个调样生效日的流通市值权重锚。
 
     ``open_days`` 为升序开市日（应已截到建库窗口）；快照日若不是开市日，锚日顺延到
     其后的首个开市日，同日取该指数较新的一份名单。返回 ``(INDEX_WEIGHTS, 剔除清单)``。
     """
     days = sorted(set(open_days))
-    if snapshots.height == 0 or not days:
+    if snapshots.height == 0 or float_mv.height == 0 or not days:
         return pl.DataFrame(schema=INDEX_WEIGHTS), pl.DataFrame(schema=_DROPPED_SCHEMA)
 
     snapshots = snapshots.select(list(INDEX_MEMBER_SNAPSHOTS.keys())).cast(
         INDEX_MEMBER_SNAPSHOTS
     )
+    float_mv = float_mv.select(list(FLOAT_MV.keys())).cast(FLOAT_MV)
     anchor_rows: list[dict[str, object]] = []
     dropped_rows: list[dict[str, object]] = []
 
@@ -339,7 +340,7 @@ def build_equivalent_anchors(
             ].to_list()
         for anchor_day in sorted(chosen):
             members = pl.DataFrame({"instrument": chosen[anchor_day]})
-            weights, dropped = market_cap_weights_on(members, bars, anchor_day)
+            weights, dropped = float_mv_weights_on(members, float_mv, anchor_day)
             anchor_rows.extend(
                 {
                     "date": anchor_day,
@@ -373,14 +374,14 @@ def build_equivalent_anchors(
     return anchors, dropped_frame
 
 
-def compare_equivalent_to_official(
+def compare_weights_to_official(
     official_anchors: pl.DataFrame,
-    bars: pl.DataFrame,
+    float_mv: pl.DataFrame,
 ) -> pl.DataFrame:
-    """用同一等效市值口径重算官方锚日的权重，返回与官方值的逐票偏差明细。
+    """用同一流通市值口径重算官方锚日的权重，返回与官方值的逐票偏差明细。
 
-    官方锚日成分名单取自 ``official_anchors``，权重用 ``close × adjfactor`` 构造。
-    输出列 ``(anchor_date, index_code, instrument, equivalent_weight,
+    官方锚日成分名单取自 ``official_anchors``，权重用当日 ``Dsmvosd`` 构造。
+    输出列 ``(anchor_date, index_code, instrument, float_mv_weight,
     official_weight, abs_deviation)``，用于披露近似口径的误差量级。
     """
     out_schema = pl.Schema(
@@ -388,7 +389,7 @@ def compare_equivalent_to_official(
             "anchor_date": pl.Date,
             "index_code": pl.String,
             "instrument": pl.String,
-            "equivalent_weight": pl.Float64,
+            "float_mv_weight": pl.Float64,
             "official_weight": pl.Float64,
             "abs_deviation": pl.Float64,
         }
@@ -403,10 +404,10 @@ def compare_equivalent_to_official(
         sub = official_anchors.filter(pl.col("index_code") == code)
         for day in sorted(set(sub["date"].to_list())):
             official = sub.filter(pl.col("date") == day)
-            weights, _ = market_cap_weights_on(
-                official.select("instrument"), bars, day
+            weights, _ = float_mv_weights_on(
+                official.select("instrument"), float_mv, day
             )
-            joined = weights.rename({"weight": "equivalent_weight"}).join(
+            joined = weights.rename({"weight": "float_mv_weight"}).join(
                 official.select(
                     "instrument", pl.col("weight").alias("official_weight")
                 ),
@@ -418,10 +419,10 @@ def compare_equivalent_to_official(
                     "anchor_date": day,
                     "index_code": code,
                     "instrument": row["instrument"],
-                    "equivalent_weight": row["equivalent_weight"],
+                    "float_mv_weight": row["float_mv_weight"],
                     "official_weight": row["official_weight"],
                     "abs_deviation": abs(
-                        row["equivalent_weight"] - row["official_weight"]
+                        row["float_mv_weight"] - row["official_weight"]
                     ),
                 }
                 for row in joined.iter_rows(named=True)
@@ -433,11 +434,11 @@ __all__ = [
     "CHANGE_ADD",
     "CHANGE_DROP",
     "CSMAR_CHANGE_GLOB",
-    "build_equivalent_anchors",
+    "build_float_mv_anchors",
     "check_reconstruction_invariant",
-    "compare_equivalent_to_official",
+    "compare_weights_to_official",
     "csmar_change_files",
-    "market_cap_weights_on",
+    "float_mv_weights_on",
     "read_csmar_changes",
     "reconstruct_snapshots",
 ]

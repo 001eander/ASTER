@@ -10,7 +10,7 @@
 - ``update_index_anchors`` 幂等与变更落盘；
 - CSMAR 变更表解析（过滤 / 去重 / 归一化）；
 - 逆放重建历史成分与正放不变式；
-- 等效市值权重锚（含停牌票剔除）与官方锚优先合并；
+- 流通市值权重锚（含无市值票剔除）、市值表读写与官方锚优先合并；
 - validate 的成分/权重/漂移检查触发与不触发。
 """
 from __future__ import annotations
@@ -21,13 +21,18 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from quant.data.float_mv import (
+    FLOAT_MV_FILE,
+    read_float_mv,
+    write_float_mv,
+)
 from quant.data.index_history import (
     CHANGE_ADD,
     CHANGE_DROP,
-    build_equivalent_anchors,
+    build_float_mv_anchors,
     check_reconstruction_invariant,
-    compare_equivalent_to_official,
-    market_cap_weights_on,
+    compare_weights_to_official,
+    float_mv_weights_on,
     read_csmar_changes,
     reconstruct_snapshots,
 )
@@ -48,6 +53,7 @@ from quant.data.index_members import (
 )
 from quant.data.schema import (
     DAILY_BARS,
+    FLOAT_MV,
     INDEX_DRIFT_CHECK,
     INDEX_MEMBERS,
     INDEX_MEMBER_CHANGES,
@@ -712,46 +718,64 @@ def test_check_reconstruction_invariant_raises_on_tamper() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 等效市值权重锚
+# 流通市值权重锚
 # ---------------------------------------------------------------------------
 
 
-def test_market_cap_weights_drops_suspended() -> None:
+def _float_mv(day: date, instrument: str, value: float) -> dict[str, object]:
+    return {"date": day, "instrument": instrument, "float_mv": value}
+
+
+def test_float_mv_weights_drops_missing_market_value() -> None:
     members = pl.DataFrame({"instrument": ["600000.SH", "000001.SZ", "300750.SZ"]})
-    bars = pl.DataFrame(
+    mv = pl.DataFrame(
         [
-            _bar(date(2024, 6, 17), "600000.SH", close=10.0, adjfactor=1.0),
-            _bar(date(2024, 6, 17), "000001.SZ", close=20.0, adjfactor=2.0),
-            # 300750.SZ 当日报价缺失（停牌），应剔除。
+            _float_mv(date(2024, 6, 17), "600000.SH", 10.0),
+            _float_mv(date(2024, 6, 17), "000001.SZ", 40.0),
+            # 300750.SZ 当日无市值（停牌），应剔除。
         ],
-        schema=DAILY_BARS,
+        schema=FLOAT_MV,
     )
-    weights, dropped = market_cap_weights_on(members, bars, date(2024, 6, 17))
+    weights, dropped = float_mv_weights_on(members, mv, date(2024, 6, 17))
     table = {row["instrument"]: row["weight"] for row in weights.iter_rows(named=True)}
     assert table["600000.SH"] == pytest.approx(10.0 / 50.0)
     assert table["000001.SZ"] == pytest.approx(40.0 / 50.0)
     assert dropped["instrument"].to_list() == ["300750.SZ"]
 
 
-def test_build_equivalent_anchors_clamps_to_open_day() -> None:
+def test_float_mv_weights_drops_nonpositive_market_value() -> None:
+    members = pl.DataFrame({"instrument": ["600000.SH", "000001.SZ"]})
+    mv = pl.DataFrame(
+        [
+            _float_mv(date(2024, 6, 17), "600000.SH", 0.0),
+            _float_mv(date(2024, 6, 17), "000001.SZ", 20.0),
+        ],
+        schema=FLOAT_MV,
+    )
+    weights, dropped = float_mv_weights_on(members, mv, date(2024, 6, 17))
+    assert set(weights["instrument"].to_list()) == {"000001.SZ"}
+    assert dropped["instrument"].to_list() == ["600000.SH"]
+
+
+def test_build_float_mv_anchors_clamps_to_open_day() -> None:
     # 快照日 6/15 非开市日，锚日顺延到 6/17。
     snapshots = _base_frame("000300", date(2024, 6, 15), ["600000.SH", "000001.SZ"])
-    bars = pl.DataFrame(
+    mv = pl.DataFrame(
         [
-            _bar(date(2024, 6, 17), "600000.SH", close=10.0, adjfactor=1.0),
-            _bar(date(2024, 6, 17), "000001.SZ", close=30.0, adjfactor=1.0),
+            _float_mv(date(2024, 6, 17), "600000.SH", 1.0),
+            _float_mv(date(2024, 6, 17), "000001.SZ", 3.0),
         ],
-        schema=DAILY_BARS,
+        schema=FLOAT_MV,
     )
-    anchors, dropped = build_equivalent_anchors(
-        snapshots, bars, [date(2024, 6, 14), date(2024, 6, 17)], index_codes=("000300",)
+    anchors, dropped = build_float_mv_anchors(
+        snapshots, mv, [date(2024, 6, 14), date(2024, 6, 17)], index_codes=("000300",)
     )
     assert anchors["date"].unique().to_list() == [date(2024, 6, 17)]
     assert anchors["weight"].sum() == pytest.approx(1.0)
     assert dropped.height == 0
 
 
-def test_compare_equivalent_to_official_reports_deviation() -> None:
+def test_compare_weights_to_official_reports_deviation() -> None:
     official = pl.DataFrame(
         [
             _anchor(date(2024, 6, 17), "600000.SH", 0.5),
@@ -759,19 +783,44 @@ def test_compare_equivalent_to_official_reports_deviation() -> None:
         ],
         schema=INDEX_WEIGHTS,
     )
-    bars = pl.DataFrame(
+    mv = pl.DataFrame(
         [
-            _bar(date(2024, 6, 17), "600000.SH", close=10.0, adjfactor=1.0),
-            _bar(date(2024, 6, 17), "000001.SZ", close=30.0, adjfactor=1.0),
+            _float_mv(date(2024, 6, 17), "600000.SH", 1.0),
+            _float_mv(date(2024, 6, 17), "000001.SZ", 3.0),
         ],
-        schema=DAILY_BARS,
+        schema=FLOAT_MV,
     )
-    out = compare_equivalent_to_official(official, bars)
+    out = compare_weights_to_official(official, mv)
     assert out.height == 2
     row = out.filter(pl.col("instrument") == "000001.SZ").row(0, named=True)
-    assert row["equivalent_weight"] == pytest.approx(0.75)
+    assert row["float_mv_weight"] == pytest.approx(0.75)
     assert row["official_weight"] == pytest.approx(0.5)
     assert row["abs_deviation"] == pytest.approx(0.25)
+
+
+def test_float_mv_write_read_roundtrip(tmp_path: Path) -> None:
+    frame = pl.DataFrame(
+        [
+            _float_mv(date(2024, 6, 17), "600000.SH", 123.5),
+            _float_mv(date(2024, 6, 17), "000001.SZ", 456.0),
+            _float_mv(date(2024, 6, 18), "600000.SH", 130.0),
+        ],
+        schema=FLOAT_MV,
+    )
+    path = write_float_mv(tmp_path, frame)
+    assert path == tmp_path / FLOAT_MV_FILE
+    back = read_float_mv(tmp_path)
+    assert back.height == 3
+    assert back.schema == pl.Schema(FLOAT_MV)
+    assert back.sort(["date", "instrument"]).equals(
+        frame.sort(["date", "instrument"])
+    )
+
+
+def test_read_float_mv_missing_returns_empty(tmp_path: Path) -> None:
+    out = read_float_mv(tmp_path)
+    assert out.height == 0
+    assert out.schema == pl.Schema(FLOAT_MV)
 
 
 def test_merge_weight_anchors_official_priority() -> None:
