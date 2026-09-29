@@ -15,6 +15,8 @@ export function createDockerSandbox(opts: {
   taskDir: string;
   image: string;
   timeoutMs?: number;
+  /** 额外挂载，单条同 docker -v 语法（host:container[:ro]），如数据只读挂载。 */
+  extraMounts?: string[];
   docker?: DockerRun;
 }): SandboxPort {
   const docker = opts.docker ?? runDocker;
@@ -24,6 +26,11 @@ export function createDockerSandbox(opts: {
       await cp(solutionDir, path.join(workDir, "solution"), { recursive: true });
       await cp(opts.taskDir, path.join(workDir, "task"), { recursive: true });
       await cp(path.join(opts.taskDir, "eval.sh"), path.join(workDir, "eval.sh"));
+
+      const mountArgs: string[] = [];
+      for (const mount of opts.extraMounts ?? []) {
+        mountArgs.push("-v", mount);
+      }
 
       const evalLog = path.join(solutionDir, "eval.log");
       const evalOut = path.join(solutionDir, "eval.stdout");
@@ -45,6 +52,7 @@ export function createDockerSandbox(opts: {
             "none",
             "-v",
             `${workDir}:/work`,
+            ...mountArgs,
             "-w",
             "/work",
             opts.image,

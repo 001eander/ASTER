@@ -1,0 +1,14 @@
+# 构建上下文裁剪：镜像只 COPY quant/，其余目录不进入上下文。
+.git/
+.venv/
+node_modules/
+dist/
+data/
+runs/
+tests/
+factor_library/
+scripts/
+docker/
+tasks/
+prompts/
+*.md
