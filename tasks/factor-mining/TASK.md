@@ -63,9 +63,9 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 3. **schema 校验**：输入面板与因子输出的列、dtype、键唯一性。
 4. **计算**：调用 `compute`。
 5. **截断重算**：抽样检测日，把数据截断到该日重算，与全量结果对比。检出前视即硬失败。
-6. **IC 指标**：RankIC 均值、ICIR、分层单调性、换手。
+6. **指标与行为查重**：RankIC 均值、ICIR、分层单调性、换手，以及与库内已入库因子（`status == "pool"`）的逐日截面相关均值 `max_corr`。
 
-跑完全流程则写出 `/work/score.json`：`score = rank_ic_mean`（可负，越高越好），并带 `higher_is_better` 与 `notes`。硬失败（崩溃、schema 不合规、前视、复杂度超标）由退出码非 0 表达，不写 `score.json`。
+跑完全流程则写出 `/work/score.json`：`score = quality × (1 - max_corr)`（可负，越高越好）。`quality` 为折扣前的 `rank_ic_mean`，`max_corr` 取绝对值最大者（库内无因子可查时为 None，折扣记 1.0），共线性越强分数越低；`higher_is_better` 为 true，`notes` 与 `details.metrics` 把 `quality` 与 `corr_discount` 拆开写。硬失败（崩溃、schema 不合规、前视、复杂度超标）由退出码非 0 表达，不写 `score.json`。
 
 ## 过关线
 
@@ -74,9 +74,10 @@ Context 判断 `stop` 的依据是 `score.json` 里 `details.gate_passed == true
 - `rank_ic_mean ≥ 0.02`
 - `icir ≥ 0.2`
 - 分层单调性 `mono > 0`
+- 与库内 pool 因子的行为相关性 `max_corr ≤ 0.7`（`|max_corr| > 0.7` 即判冗余拒绝；库内无因子可查时该项跳过）
 - 截断重算与复杂度全部通过
 
-四项缺一不可。
+五项缺一不可。注意共线性折扣已先行压低 `score`，`max_corr > 0.7` 的拒绝只是兜底，不存在「分数高却被拒」的隐藏规则。
 
 ## 数据
 

@@ -19,7 +19,6 @@ from quant.factor_lib.correlation import (
 )
 from quant.factor_lib.prune import (
     CAPACITY_RATIO,
-    CLUSTER_CORR_THRESHOLD,
     REASON_CAPACITY,
     REASON_CLUSTER,
     PruneDemotion,
@@ -28,6 +27,7 @@ from quant.factor_lib.prune import (
     apply_prune,
     build_corr_matrix,
     capacity_limit,
+    cluster_corr_threshold,
     plan_prune,
     prune,
     quality_key,
@@ -55,7 +55,6 @@ from quant.factor_lib.schema import (
 
 __all__ = [
     "CAPACITY_RATIO",
-    "CLUSTER_CORR_THRESHOLD",
     "CORR_METHOD",
     "KNOWN_LINEAGE_OPS",
     "REGISTRY_FILENAME",
@@ -77,6 +76,7 @@ __all__ = [
     "apply_prune",
     "build_corr_matrix",
     "capacity_limit",
+    "cluster_corr_threshold",
     "cross_section_corr",
     "load_library_values",
     "load_registry",
