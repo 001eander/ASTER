@@ -7,8 +7,8 @@ export type RoleModel = {
   thinkingLevel: ThinkingLevelName;
 };
 
-export const DEFAULT_CONTEXT_MODEL = "deepseek/deepseek-v4-pro:max";
-export const DEFAULT_PROPOSAL_MODEL = "deepseek/deepseek-v4-flash-vision-exp:high";
+export const DEFAULT_CONTEXT_MODEL = "kimi-coding/k3-256k:max";
+export const DEFAULT_PROPOSAL_MODEL = "deepseek/deepseek-flash:high";
 
 export function parseRoleModel(text: string): RoleModel {
   const lastColon = text.lastIndexOf(":");
