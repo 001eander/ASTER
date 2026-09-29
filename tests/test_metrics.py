@@ -15,7 +15,12 @@ import polars as pl
 import pytest
 
 from quant.eval.metrics import (
+    BENCHMARK_NAV_COL,
+    EXCESS_NAV_COL,
     ICSummary,
+    BenchmarkSummary,
+    benchmark_nav_series,
+    benchmark_performance,
     ic_series,
     layer_monotonicity,
     layered_returns,
@@ -343,3 +348,129 @@ def test_turnover_invalid_top_n() -> None:
     df = _two_day([3.0, 2.0, 1.0], [3.0, 2.0, 1.0])
     with pytest.raises(ValueError, match="top_n"):
         turnover(df, top_n=0)
+
+
+# ---------------------------------------------------------------------------
+# 基准绩效
+# ---------------------------------------------------------------------------
+
+
+def _nav(rows: list[tuple[date, float]]) -> pl.DataFrame:
+    return pl.DataFrame(
+        {"date": [day for day, _ in rows], "nav": [value for _, value in rows]}
+    )
+
+
+def _close(rows: list[tuple[date, float]]) -> pl.DataFrame:
+    return pl.DataFrame(
+        {"date": [day for day, _ in rows], "close": [value for _, value in rows]}
+    )
+
+
+def test_benchmark_nav_series_normalizes_and_aligns() -> None:
+    days = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    portfolio = _nav([(days[0], 100.0), (days[1], 110.0), (days[2], 104.5)])
+    # 基准多一天（1/1）、少一天（1/4），inner join 后仅 1/2 与 1/3。
+    benchmark = _close(
+        [(date(2024, 1, 1), 999.0), (days[0], 200.0), (days[1], 210.0)]
+    )
+    series = benchmark_nav_series(portfolio, benchmark)
+
+    assert series.columns == [
+        "date",
+        "portfolio_nav",
+        "benchmark_nav",
+        "excess_nav",
+        "portfolio_ret",
+        "benchmark_ret",
+        "excess_ret",
+    ]
+    assert series["date"].to_list() == [days[0], days[1]]
+    assert series["portfolio_nav"].to_list() == pytest.approx([1.0, 1.1])
+    assert series[BENCHMARK_NAV_COL].to_list() == pytest.approx([1.0, 1.05])
+    # 超额净值 = 组合归一 / 基准归一
+    assert series[EXCESS_NAV_COL].to_list() == pytest.approx(
+        [1.0, 1.1 / 1.05]
+    )
+    assert series["portfolio_ret"].to_list() == [None, pytest.approx(0.1)]
+    assert series["benchmark_ret"].to_list() == [None, pytest.approx(0.05)]
+    assert series["excess_ret"].to_list() == [None, pytest.approx(0.05)]
+
+
+def test_benchmark_performance_hand_computed() -> None:
+    """手算：日超额 [5%, -3%, 1%]。
+
+    - 超额年化 = mean(excess) × 252 = 0.01 × 252 = 2.52
+    - 跟踪误差 = std([0.05, -0.03, 0.01], ddof=1) × √252 = 0.04 × √252
+    - IR = 2.52 / (0.04 × √252)
+    """
+    days = [date(2024, 1, d) for d in (2, 3, 4, 5)]
+    portfolio = _nav(
+        [
+            (days[0], 1.0),
+            (days[1], 1.1),
+            (days[2], 1.1 * 0.95),
+            (days[3], 1.1 * 0.95 * 1.02),
+        ]
+    )
+    benchmark = _close(
+        [
+            (days[0], 1.0),
+            (days[1], 1.05),
+            (days[2], 1.05 * 0.98),
+            (days[3], 1.05 * 0.98 * 1.01),
+        ]
+    )
+    summary = benchmark_performance(portfolio, benchmark)
+
+    assert isinstance(summary, BenchmarkSummary)
+    assert summary.n_days == 4
+    assert summary.benchmark_total_return == pytest.approx(1.05 * 0.98 * 1.01 - 1.0)
+    assert summary.benchmark_annualized == pytest.approx(
+        (1.05 * 0.98 * 1.01) ** (252 / 4) - 1.0
+    )
+    assert summary.excess_total_return == pytest.approx(
+        1.1 * 0.95 * 1.02 / (1.05 * 0.98 * 1.01) - 1.0
+    )
+    assert summary.excess_annualized == pytest.approx(0.01 * 252)
+    assert summary.tracking_error == pytest.approx(0.04 * math.sqrt(252))
+    assert summary.information_ratio == pytest.approx(2.52 / (0.04 * math.sqrt(252)))
+
+
+def test_benchmark_performance_zero_tracking_error_gives_none_ir() -> None:
+    days = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    portfolio = _nav([(days[0], 1.0), (days[1], 1.1), (days[2], 1.21)])
+    benchmark = _close([(days[0], 1.0), (days[1], 1.05), (days[2], 1.1025)])
+    summary = benchmark_performance(portfolio, benchmark)
+    # 日超额恒为 5%，标准差为 0。
+    assert summary.excess_annualized == pytest.approx(0.05 * 252)
+    assert summary.tracking_error == pytest.approx(0.0)
+    assert summary.information_ratio is None
+
+
+def test_benchmark_performance_single_day_std_none() -> None:
+    days = [date(2024, 1, 2)]
+    summary = benchmark_performance(_nav([(days[0], 1.0)]), _close([(days[0], 100.0)]))
+    assert summary.n_days == 1
+    assert summary.excess_annualized is None
+    assert summary.tracking_error is None
+    assert summary.information_ratio is None
+
+
+def test_benchmark_performance_no_overlap() -> None:
+    summary = benchmark_performance(
+        _nav([(date(2024, 1, 2), 1.0)]), _close([(date(2024, 2, 2), 100.0)])
+    )
+    assert summary.n_days == 0
+    assert summary.benchmark_total_return is None
+    assert summary.information_ratio is None
+    assert benchmark_nav_series(
+        _nav([(date(2024, 1, 2), 1.0)]), _close([(date(2024, 2, 2), 100.0)])
+    ).height == 0
+
+
+def test_benchmark_functions_require_columns() -> None:
+    with pytest.raises(ValueError, match="缺少必需列"):
+        benchmark_nav_series(pl.DataFrame({"date": [DAY]}), _close([(DAY, 1.0)]))
+    with pytest.raises(ValueError, match="缺少必需列"):
+        benchmark_performance(_nav([(DAY, 1.0)]), pl.DataFrame({"date": [DAY]}))

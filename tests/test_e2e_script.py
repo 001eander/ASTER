@@ -13,7 +13,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from quant.automl.dataset import INSTRUMENT_COL
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    INDEX_BARS,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
 )
@@ -122,6 +123,25 @@ def _write_data_dir(
         chunk = bars.filter(pl.col("date").dt.year() == year)
         chunk.write_parquet(data_dir / "bars" / f"{int(year):04d}.parquet")
     return data_dir, instruments, days
+
+
+def _write_index_bars(
+    data_dir: Path, days: list[date], code: str = "000905", base: float = 5000.0
+) -> None:
+    """写一份指数日线（issue #67），收盘温和上行。"""
+    rows = [
+        {
+            "date": day,
+            "index_code": code,
+            "open": base + float(i),
+            "high": base + float(i) + 5.0,
+            "low": base + float(i) - 5.0,
+            "close": base + float(i),
+            "volume": 1.0e9,
+        }
+        for i, day in enumerate(days)
+    ]
+    pl.DataFrame(rows, schema=INDEX_BARS).write_parquet(data_dir / "index_bars.parquet")
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +454,36 @@ def test_run_e2e_missing_config_without_trainer_raises(tmp_path: Path) -> None:
     config = _e2e_config(tmp_path, data_dir, days)
     with pytest.raises(e2e.E2EError, match="训练配置"):
         e2e.run_e2e(config)
+
+
+def test_run_e2e_benchmark_wiring(tmp_path: Path) -> None:
+    """``--benchmark`` 接线：算超额绩效、落 benchmark.parquet、报告含超额指标。"""
+    config, days, trainer = _build_e2e_fixture(tmp_path, scores=None)
+    _write_index_bars(config.data_dir, days)
+    config = replace(config, benchmark="000905")
+    optimizer = PortfolioOptimizer(lam=1.0, kappa=0.002, w_max=0.5, max_turnover=0.30)
+
+    result = e2e.run_e2e(config, trainer=trainer, optimizer=optimizer)
+
+    assert result.benchmark is not None
+    assert result.benchmark.n_days > 0
+    assert result.benchmark_path is not None
+    assert result.benchmark_path.exists()
+    series = pl.read_parquet(result.benchmark_path)
+    assert {"benchmark_nav", "excess_nav", "excess_ret"} <= set(series.columns)
+    assert series.height == result.benchmark.n_days
+
+    report_text = result.report_path.read_text(encoding="utf-8")
+    for token in ("基准指数", "跟踪误差", "信息比率", "000905"):
+        assert token in report_text, f"报告缺少 {token}"
+    assert result.png_path.exists()
+
+
+def test_run_e2e_benchmark_missing_data_raises(tmp_path: Path) -> None:
+    config, _days, trainer = _build_e2e_fixture(tmp_path, scores=None)
+    config = replace(config, benchmark="000905")
+    with pytest.raises(e2e.E2EError, match="index_bars"):
+        e2e.run_e2e(config, trainer=trainer)
 
 
 # ---------------------------------------------------------------------------

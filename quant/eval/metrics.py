@@ -44,6 +44,18 @@ INSTRUMENT_COL: str = "instrument"
 FACTOR_COL: str = "factor"
 LABEL_COL: str = "label"
 
+#: 基准绩效函数的输入 / 输出列名（issue #67）。
+NAV_COL: str = "nav"
+CLOSE_COL: str = "close"
+BENCHMARK_NAV_COL: str = "benchmark_nav"
+EXCESS_NAV_COL: str = "excess_nav"
+PORTFOLIO_RET_COL: str = "portfolio_ret"
+BENCHMARK_RET_COL: str = "benchmark_ret"
+EXCESS_RET_COL: str = "excess_ret"
+
+#: 跟踪误差低于此阈值视为 0（浮点噪声），信息比率记 None。
+TRACKING_ERROR_MIN: float = 1e-12
+
 #: 逐日 IC 的最少有效证券数，低于此值当日 IC 记 null。
 MIN_CROSS_SECTION_COUNT: int = 30
 
@@ -335,15 +347,185 @@ def turnover(
     ).select(DATE_COL, "turnover")
 
 
+# ---------------------------------------------------------------------------
+# 基准绩效（组合 vs 指数，issue #67）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BenchmarkSummary:
+    """组合相对基准指数的超额绩效汇总。
+
+    口径
+    ----
+    - 输入按日期 **inner join**，只保留组合 nav 与基准收盘都为正的交易日。
+    - ``benchmark_nav`` / ``excess_nav`` 均以期初（首个共同交易日）归一为 1.0；
+      ``excess_nav = 组合归一净值 / 基准归一净值``。
+    - ``benchmark_annualized`` 由基准归一净值几何年化：
+      ``benchmark_nav[-1] ** (TRADING_DAYS_PER_YEAR / n_days) - 1``。
+    - ``excess_annualized`` 取日超额收益均值的算术年化
+      （``mean(excess_ret) * TRADING_DAYS_PER_YEAR``），与跟踪误差同量纲。
+    - ``tracking_error = std(excess_ret, ddof=1) * sqrt(TRADING_DAYS_PER_YEAR)``，
+      有效超额收益少于 2 个时为 None。
+    - ``information_ratio = excess_annualized / tracking_error``，跟踪误差为 0 或
+      样本不足时为 None。
+
+    有效超额收益少于 2 个时除 ``n_days`` / 总值外各统计量为 None；无共同交易日时
+    全部为 None 且 ``n_days=0``。
+    """
+
+    n_days: int
+    benchmark_total_return: float | None
+    benchmark_annualized: float | None
+    excess_total_return: float | None
+    excess_annualized: float | None
+    tracking_error: float | None
+    information_ratio: float | None
+
+
+def benchmark_nav_series(
+    portfolio_nav: pl.DataFrame, benchmark_close: pl.DataFrame
+) -> pl.DataFrame:
+    """对齐组合 nav 与基准收盘，返回基准 / 超额净值序列。
+
+    输入 ``portfolio_nav`` 含 ``(date, nav)``，``benchmark_close`` 含 ``(date, close)``。
+    输出列固定为 ``(date, portfolio_nav, benchmark_nav, excess_nav, portfolio_ret,
+    benchmark_ret, excess_ret)``：``portfolio_nav`` / ``benchmark_nav`` 以期初归一为
+    1.0，``excess_nav`` 为两者之比，收益率列由相邻净值 / 收盘相除得到（首个交易日
+    为 null）。两个输入都按 ``date`` 去重 ``keep="last"`` 后 inner join，只有双方
+    都有正值的交易日保留。
+    """
+    _require_columns(portfolio_nav, (DATE_COL, NAV_COL))
+    _require_columns(benchmark_close, (DATE_COL, CLOSE_COL))
+
+    aligned = (
+        portfolio_nav.select(DATE_COL, NAV_COL)
+        .unique(subset=[DATE_COL], keep="last")
+        .join(
+            benchmark_close.select(DATE_COL, CLOSE_COL).unique(
+                subset=[DATE_COL], keep="last"
+            ),
+            on=DATE_COL,
+            how="inner",
+        )
+        .filter((pl.col(NAV_COL) > 0) & (pl.col(CLOSE_COL) > 0))
+        .sort(DATE_COL)
+    )
+    if aligned.height == 0:
+        return pl.DataFrame(
+            schema={
+                DATE_COL: pl.Date,
+                "portfolio_nav": pl.Float64,
+                BENCHMARK_NAV_COL: pl.Float64,
+                EXCESS_NAV_COL: pl.Float64,
+                PORTFOLIO_RET_COL: pl.Float64,
+                BENCHMARK_RET_COL: pl.Float64,
+                EXCESS_RET_COL: pl.Float64,
+            }
+        )
+
+    nav0 = float(aligned[NAV_COL][0])
+    close0 = float(aligned[CLOSE_COL][0])
+    return (
+        aligned.with_columns(
+            (pl.col(NAV_COL) / nav0).alias("portfolio_nav"),
+            (pl.col(CLOSE_COL) / close0).alias(BENCHMARK_NAV_COL),
+        )
+        .with_columns(
+            (pl.col("portfolio_nav") / pl.col(BENCHMARK_NAV_COL)).alias(
+                EXCESS_NAV_COL
+            ),
+            (pl.col(NAV_COL) / pl.col(NAV_COL).shift(1) - 1.0).alias(
+                PORTFOLIO_RET_COL
+            ),
+            (pl.col(CLOSE_COL) / pl.col(CLOSE_COL).shift(1) - 1.0).alias(
+                BENCHMARK_RET_COL
+            ),
+        )
+        .with_columns(
+            (pl.col(PORTFOLIO_RET_COL) - pl.col(BENCHMARK_RET_COL)).alias(
+                EXCESS_RET_COL
+            )
+        )
+        .select(
+            DATE_COL,
+            "portfolio_nav",
+            BENCHMARK_NAV_COL,
+            EXCESS_NAV_COL,
+            PORTFOLIO_RET_COL,
+            BENCHMARK_RET_COL,
+            EXCESS_RET_COL,
+        )
+    )
+
+
+def benchmark_performance(
+    portfolio_nav: pl.DataFrame, benchmark_close: pl.DataFrame
+) -> BenchmarkSummary:
+    """按 :func:`benchmark_nav_series` 的对齐口径汇总基准与超额绩效。
+
+    跟踪误差与信息比率的定义见 :class:`BenchmarkSummary`。
+    """
+    series = benchmark_nav_series(portfolio_nav, benchmark_close)
+    n_days = series.height
+    if n_days == 0:
+        return BenchmarkSummary(0, None, None, None, None, None, None)
+
+    benchmark_final = float(series[BENCHMARK_NAV_COL][-1])
+    excess_final = float(series[EXCESS_NAV_COL][-1])
+    benchmark_total = benchmark_final - 1.0
+    benchmark_annualized = benchmark_final ** (
+        TRADING_DAYS_PER_YEAR / n_days
+    ) - 1.0
+
+    raw = series.get_column(EXCESS_RET_COL)
+    excess = raw.filter(raw.is_finite())
+    n_excess = excess.len()
+    if n_excess >= 2:
+        mean = float(excess.mean())
+        std = float(excess.std())
+        excess_annualized: float | None = mean * TRADING_DAYS_PER_YEAR
+        tracking_error: float | None = std * math.sqrt(TRADING_DAYS_PER_YEAR)
+        information_ratio: float | None = (
+            excess_annualized / tracking_error
+            if tracking_error > TRACKING_ERROR_MIN
+            else None
+        )
+    else:
+        excess_annualized = None
+        tracking_error = None
+        information_ratio = None
+
+    return BenchmarkSummary(
+        n_days=n_days,
+        benchmark_total_return=benchmark_total,
+        benchmark_annualized=benchmark_annualized,
+        excess_total_return=excess_final - 1.0,
+        excess_annualized=excess_annualized,
+        tracking_error=tracking_error,
+        information_ratio=information_ratio,
+    )
+
+
 __all__ = [
+    "BENCHMARK_NAV_COL",
+    "BENCHMARK_RET_COL",
+    "BenchmarkSummary",
+    "CLOSE_COL",
     "DATE_COL",
     "DEFAULT_LAYERS",
+    "EXCESS_NAV_COL",
+    "EXCESS_RET_COL",
     "FACTOR_COL",
     "ICSummary",
     "INSTRUMENT_COL",
     "LABEL_COL",
     "MIN_CROSS_SECTION_COUNT",
+    "NAV_COL",
+    "PORTFOLIO_RET_COL",
     "TRADING_DAYS_PER_YEAR",
+    "benchmark_nav_series",
+    "benchmark_performance",
     "ic_series",
     "layer_monotonicity",
     "layered_returns",

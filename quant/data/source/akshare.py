@@ -65,6 +65,7 @@ import polars as pl
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    INDEX_BARS,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
     board_of,
@@ -96,6 +97,14 @@ EM_CIRCUIT_THRESHOLD: int = CIRCUIT_THRESHOLD
 DATE_FORMAT: str = "%Y%m%d"
 #: 腾讯接口起始年份的兜底值，用于绕过 akshare 的 ``qfqday`` bug。
 TX_START_YEAR_PLACEHOLDER: str = "1990-01-01"
+
+#: 指数代码 → 新浪符号（issue #67）。新浪 ``stock_zh_index_daily`` 按 ``sh`` / ``sz``
+#: 前缀取号，中证 2000（932000）在该源不可用，走中证官网兜底。
+INDEX_SINA_SYMBOLS: dict[str, str] = {
+    "000300": "sh000300",
+    "000905": "sh000905",
+    "000852": "sh000852",
+}
 
 #: 「派X元」形式的现金分红文本（前导「10」可能与其后的送转共用，故不强制匹配）。
 _PER10_CASH_RE = r"派\s*([0-9]+(?:\.[0-9]+)?)"
@@ -451,6 +460,116 @@ class AkshareSource:
             .cast(DAILY_BARS)
         )
         return out
+
+    # ------------------------------------------------------------------
+    # 指数日线（issue #67）
+    # ------------------------------------------------------------------
+
+    def index_bars(
+        self, index_codes: list[str], start: date, end: date
+    ) -> pl.DataFrame:
+        """抓取基准指数日线，schema 见 ``schema.INDEX_BARS``。
+
+        单只指数失败 log+skip；全部失败返回空表。沪深 300 / 500 / 1000 走新浪
+        ``stock_zh_index_daily``，中证 2000（932000）新浪无此代码，走中证官网
+        ``stock_zh_index_hist_csindex``；新浪失败时也回退到中证官网。两个源都按
+        实例熔断，连续失败达到 ``CIRCUIT_THRESHOLD`` 后跳过。
+        """
+        frames: list[pl.DataFrame] = []
+        for index_code in index_codes:
+            try:
+                frame = self._index_bars_one(index_code, start, end)
+            except Exception as exc:  # noqa: BLE001 - 单只指数失败不影响其余
+                logger.warning("抓取指数 %s 日线失败：%s", index_code, exc)
+                continue
+            if frame is not None and frame.height:
+                frames.append(frame)
+        if not frames:
+            return _empty(INDEX_BARS)
+        return (
+            pl.concat(frames)
+            .sort(["index_code", "date"])
+            .select(list(INDEX_BARS.keys()))
+            .cast(INDEX_BARS)
+        )
+
+    def _index_bars_one(
+        self, index_code: str, start: date, end: date
+    ) -> pl.DataFrame | None:
+        fetchers: list[Callable[[str, date, date], pl.DataFrame | None]] = []
+        if index_code in INDEX_SINA_SYMBOLS:
+            fetchers.append(self._fetch_index_sina)
+        fetchers.append(self._fetch_index_csindex)
+        for fetch in fetchers:
+            name = fetch.__name__
+            if self._source_failures.get(name, 0) >= CIRCUIT_THRESHOLD:
+                continue
+            try:
+                frame = fetch(index_code, start, end)
+            except Exception as exc:  # noqa: BLE001
+                failures = self._source_failures.get(name, 0) + 1
+                self._source_failures[name] = failures
+                logger.warning(
+                    "%s 抓取指数 %s 失败（连续 %d 次）：%s",
+                    name,
+                    index_code,
+                    failures,
+                    exc,
+                )
+                continue
+            self._source_failures[name] = 0
+            if frame is not None and frame.height:
+                return frame
+        return None
+
+    def _fetch_index_sina(
+        self, index_code: str, start: date, end: date
+    ) -> pl.DataFrame | None:
+        symbol = INDEX_SINA_SYMBOLS[index_code]
+        raw = _call(ak.stock_zh_index_daily, symbol=symbol)
+        if raw is None or raw.empty:
+            return None
+        df = _from_pandas(raw).select(
+            pl.col("date").cast(pl.Date, strict=False).alias("date"),
+            pl.col("open").cast(pl.Float64, strict=False).alias("open"),
+            pl.col("high").cast(pl.Float64, strict=False).alias("high"),
+            pl.col("low").cast(pl.Float64, strict=False).alias("low"),
+            pl.col("close").cast(pl.Float64, strict=False).alias("close"),
+            pl.col("volume").cast(pl.Float64, strict=False).alias("volume"),
+        )
+        return self._finalize_index(index_code, df, start, end)
+
+    def _fetch_index_csindex(
+        self, index_code: str, start: date, end: date
+    ) -> pl.DataFrame | None:
+        raw = _call(
+            ak.stock_zh_index_hist_csindex,
+            symbol=index_code,
+            start_date=_fmt(start),
+            end_date=_fmt(end),
+        )
+        if raw is None or raw.empty:
+            return None
+        df = _from_pandas(raw).select(
+            pl.col("日期").cast(pl.Date, strict=False).alias("date"),
+            pl.col("开盘").cast(pl.Float64, strict=False).alias("open"),
+            pl.col("最高").cast(pl.Float64, strict=False).alias("high"),
+            pl.col("最低").cast(pl.Float64, strict=False).alias("low"),
+            pl.col("收盘").cast(pl.Float64, strict=False).alias("close"),
+            pl.col("成交量").cast(pl.Float64, strict=False).alias("volume"),
+        )
+        return self._finalize_index(index_code, df, start, end)
+
+    def _finalize_index(
+        self, index_code: str, df: pl.DataFrame, start: date, end: date
+    ) -> pl.DataFrame:
+        return (
+            df.with_columns(pl.lit(index_code).alias("index_code"))
+            .filter((pl.col("date") >= start) & (pl.col("date") <= end))
+            .select(list(INDEX_BARS.keys()))
+            .cast(INDEX_BARS)
+            .sort(["index_code", "date"])
+        )
 
     # ------------------------------------------------------------------
     # 交易日历

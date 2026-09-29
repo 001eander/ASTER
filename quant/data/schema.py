@@ -109,6 +109,23 @@ CORPORATE_ACTIONS = pl.Schema(
     }
 )
 
+#: 指数日线表（issue #67）。``index_code`` 为六位数字、不带交易所后缀，
+#: 与证券代码空间不混淆。用于指数增强 / 超额绩效的基准。
+INDEX_BARS = pl.Schema(
+    {
+        "date": pl.Date,
+        "index_code": pl.String,
+        "open": pl.Float64,
+        "high": pl.Float64,
+        "low": pl.Float64,
+        "close": pl.Float64,
+        "volume": pl.Float64,
+    }
+)
+
+#: 落地的基准指数集合：沪深 300 / 中证 500 / 中证 1000 / 中证 2000。
+INDEX_CODES: tuple[str, ...] = ("000300", "000905", "000852", "932000")
+
 #: 证券信息表。ST 状态随时间变化，不放在此表，由涨跌停预计算按日期区间处理。
 INSTRUMENT_INFO = pl.Schema(
     {
@@ -150,3 +167,13 @@ def check_daily_bars(df: pl.DataFrame, *, name: str = "daily_bars") -> None:
         raise SchemaError(f"{name} 存在重复的 (instrument, date)")
     if not df.equals(df.sort(key)):
         raise SchemaError(f"{name} 未按 (instrument, date) 排序")
+
+
+def check_index_bars(df: pl.DataFrame, *, name: str = "index_bars") -> None:
+    """指数日线表的额外约定：按 (index_code, date) 排序，同键不重复。"""
+    check_schema(df, INDEX_BARS, name=name)
+    key = ["index_code", "date"]
+    if df.select(key).is_duplicated().any():
+        raise SchemaError(f"{name} 存在重复的 (index_code, date)")
+    if not df.equals(df.sort(key)):
+        raise SchemaError(f"{name} 未按 (index_code, date) 排序")

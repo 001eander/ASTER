@@ -20,11 +20,13 @@ from quant.data.cache import (
     fetch_full,
     load_bars,
     load_corporate_actions,
+    load_index_bars,
 )
 from quant.data.limit import ST_INTERVALS
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    INDEX_BARS,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
 )
@@ -84,6 +86,18 @@ def _ca(day: date, instrument: str) -> dict[str, object]:
     }
 
 
+def _index_row(day: date, code: str, close: float) -> dict[str, object]:
+    return {
+        "date": day,
+        "index_code": code,
+        "open": close,
+        "high": close + 1.0,
+        "low": close - 1.0,
+        "close": close,
+        "volume": 1000.0,
+    }
+
+
 class FakeSource:
     """实现 ``DataSource`` 协议的内存数据源（参考 tests/test_cache.py）。"""
 
@@ -93,14 +107,17 @@ class FakeSource:
         *,
         info: pl.DataFrame | None = None,
         actions: dict[str, list[dict[str, object]]] | None = None,
+        index_rows: dict[str, list[dict[str, object]]] | None = None,
         fail: set[str] | None = None,
     ) -> None:
         self._bars = bars or {}
         self._info = info if info is not None else pl.DataFrame(schema=INSTRUMENT_INFO)
         self._actions = actions or {}
+        self._index_rows = index_rows or {}
         self._fail = set(fail or ())
         self.bar_calls: list[tuple[str, date, date]] = []
         self.ca_calls: list[tuple[str, date, date]] = []
+        self.index_calls: list[tuple[str, date, date]] = []
 
     def daily_bars(
         self, instruments: list[str], start: date, end: date
@@ -142,6 +159,21 @@ class FakeSource:
 
     def instrument_info(self) -> pl.DataFrame:
         return self._info
+
+    def index_bars(
+        self, index_codes: list[str], start: date, end: date
+    ) -> pl.DataFrame:
+        rows: list[dict[str, object]] = []
+        for code in index_codes:
+            self.index_calls.append((code, start, end))
+            rows.extend(
+                row
+                for row in self._index_rows.get(code, [])
+                if start <= row["date"] <= end  # type: ignore[operator]
+            )
+        if not rows:
+            return pl.DataFrame(schema=INDEX_BARS)
+        return pl.DataFrame(rows, schema=INDEX_BARS).sort(["index_code", "date"])
 
 
 def _write_empty_st(data_dir: Path) -> None:
@@ -245,6 +277,51 @@ def test_daily_update_is_idempotent(tmp_path: Path) -> None:
     assert load_corporate_actions(tmp_path).equals(ca_snapshot)
     assert bars_snapshot.height == 2
     assert first.limit_years == {2026: 1}
+
+
+def test_daily_update_lands_index_bars(tmp_path: Path) -> None:
+    """指数行情阶段（issue #67）：落地 000300 并计入汇总，同日重跑跳过。"""
+    bars = {
+        "600000.SH": [
+            _bar(date(2025, 12, 31), "600000.SH", close=10.0),
+            _bar(date(2026, 1, 2), "600000.SH", close=12.0),
+        ]
+    }
+    info = _info("600000.SH")
+    index_rows = {
+        "000300": [
+            _index_row(date(2025, 12, 31), "000300", 4000.0),
+            _index_row(date(2026, 1, 2), "000300", 4020.0),
+        ]
+    }
+
+    fetch_full(FakeSource(bars, info=info), tmp_path, start=date(2025, 1, 1), end=date(2025, 12, 31), ca=False)
+    _write_empty_st(tmp_path)
+
+    result = run_daily_update(
+        FakeSource(bars, info=info, index_rows=index_rows),
+        tmp_path,
+        end=date(2026, 1, 2),
+    )
+
+    assert result.index.ok == 1
+    assert result.index.empty == 3
+    assert result.index.rows == 2
+    assert result.index.last_dates["000300"] == date(2026, 1, 2).isoformat()
+    assert result.timings["index"] >= 0.0
+
+    loaded = load_index_bars(tmp_path)
+    assert loaded.height == 2
+    assert loaded["close"].to_list() == [4000.0, 4020.0]
+
+    second = run_daily_update(
+        FakeSource(bars, info=info, index_rows=index_rows),
+        tmp_path,
+        end=date(2026, 1, 2),
+    )
+    # 000300 已到 end 短路跳过；其余 3 只无数据记 empty。
+    assert second.index.skipped == 1
+    assert second.index.empty == 3
 
 
 # ---------------------------------------------------------------------------

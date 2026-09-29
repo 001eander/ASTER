@@ -29,9 +29,11 @@ JSON，在 ``[start, end]`` 区间跑一次完整的 :class:`~quant.backtest.eng
         --data-dir data --model-dir runs/automl/baseline \
         --start 2025-01-02 --end 2026-09-28 \
         --initial-cash 1000000 --top-k 50 --lookback-days 250 \
-        --out-dir runs/e2e
+        --benchmark 000905 --out-dir runs/e2e
 
 落盘（``--out-dir``）:: nav.parquet / report.md / account_states.md / nav.png
+指定 ``--benchmark`` 时额外落 ``benchmark.parquet``（基准 / 超额净值与日收益序列），
+报告「绩效」表追加基准年化 / 超额年化 / 跟踪误差 / 信息比率，净值图叠加基准曲线。
 """
 from __future__ import annotations
 
@@ -74,6 +76,13 @@ from quant.data.cache import (  # noqa: E402
     load_bars,
     load_calendar,
     load_corporate_actions,
+    load_index_bars,
+)
+from quant.eval.metrics import (  # noqa: E402
+    BENCHMARK_NAV_COL,
+    BenchmarkSummary,
+    benchmark_nav_series,
+    benchmark_performance,
 )
 from quant.labels.open_to_open import DEFAULT_HORIZON  # noqa: E402
 from quant.portfolio.optimizer import (  # noqa: E402
@@ -166,6 +175,8 @@ class E2EConfig:
     factor_library_dir: Path = DEFAULT_FACTOR_LIBRARY_DIR
     horizon: int = DEFAULT_HORIZON
     train_config_path: Path | None = None
+    #: 基准指数代码（六位，如 ``000905``）；None 表示不计算基准 / 超额绩效。
+    benchmark: str | None = None
 
     @property
     def resolved_train_config_path(self) -> Path:
@@ -204,6 +215,10 @@ class E2EResult:
     report_path: Path
     states_path: Path
     png_path: Path
+    #: 基准绩效汇总与对齐序列（``--benchmark`` 未指定时为 None）。
+    benchmark: BenchmarkSummary | None = None
+    benchmark_series: pl.DataFrame | None = None
+    benchmark_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -545,8 +560,18 @@ def run_e2e(
         config.initial_cash,
     )
 
-    nav_path, report_path, states_path, png_path = _write_outputs(
-        config, result, stats, train_config, close_panel
+    benchmark = _load_benchmark(config, result)
+    benchmark_summary = benchmark[0] if benchmark is not None else None
+    benchmark_series = benchmark[1] if benchmark is not None else None
+
+    nav_path, report_path, states_path, png_path, benchmark_path = _write_outputs(
+        config,
+        result,
+        stats,
+        train_config,
+        close_panel,
+        benchmark_summary,
+        benchmark_series,
     )
     metrics = compute_metrics(result)
     logger.info(
@@ -566,7 +591,44 @@ def run_e2e(
         report_path=report_path,
         states_path=states_path,
         png_path=png_path,
+        benchmark=benchmark_summary,
+        benchmark_series=benchmark_series,
+        benchmark_path=benchmark_path,
     )
+
+
+def _load_benchmark(
+    config: E2EConfig, result: BacktestResult
+) -> tuple[BenchmarkSummary, pl.DataFrame] | None:
+    """读取基准指数并计算基准 / 超额绩效，未配置 ``--benchmark`` 返回 None。"""
+    if config.benchmark is None:
+        return None
+    index_bars = load_index_bars(
+        config.data_dir,
+        index_codes=[config.benchmark],
+        start=config.start,
+        end=config.end,
+    )
+    if index_bars.height == 0:
+        raise E2EError(
+            f"index_bars 缺少基准 {config.benchmark} 在 "
+            f"[{config.start}, {config.end}] 的数据，请先跑 daily_update"
+        )
+    benchmark_close = index_bars.select(DATE_COL, "close")
+    portfolio_nav = result.nav.select(DATE_COL, "nav")
+    summary = benchmark_performance(portfolio_nav, benchmark_close)
+    series = benchmark_nav_series(portfolio_nav, benchmark_close)
+    if series.height == 0:
+        raise E2EError("组合与基准没有共同交易日，无法计算超额绩效")
+    logger.info(
+        "基准 %s：%d 个对齐交易日，超额年化 %.4f%%，跟踪误差 %.4f%%，IR %.4f",
+        config.benchmark,
+        summary.n_days,
+        (summary.excess_annualized or 0.0) * 100.0,
+        (summary.tracking_error or 0.0) * 100.0,
+        summary.information_ratio or 0.0,
+    )
+    return summary, series
 
 
 def _group_scores(
@@ -662,24 +724,60 @@ def _write_outputs(
     stats: SignalStats,
     train_config: TrainConfig | None,
     close_panel: pl.DataFrame,
-) -> tuple[Path, Path, Path, Path]:
+    benchmark_summary: BenchmarkSummary | None = None,
+    benchmark_series: pl.DataFrame | None = None,
+) -> tuple[Path, Path, Path, Path, Path | None]:
     out_dir = config.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     nav_path = out_dir / "nav.parquet"
     report_path = out_dir / "report.md"
     states_path = out_dir / "account_states.md"
     png_path = out_dir / "nav.png"
+    benchmark_path = out_dir / "benchmark.parquet" if benchmark_series is not None else None
 
     result.nav.write_parquet(nav_path)
+    if benchmark_path is not None and benchmark_series is not None:
+        benchmark_series.write_parquet(benchmark_path)
     metrics = compute_metrics(result)
     report_path.write_text(
-        render_report(config, result, stats, metrics, train_config), encoding="utf-8"
+        render_report(config, result, stats, metrics, train_config, benchmark_summary),
+        encoding="utf-8",
     )
     states_path.write_text(
         render_account_states(config, result, close_panel), encoding="utf-8"
     )
-    _draw_nav(result, png_path)
-    return nav_path, report_path, states_path, png_path
+    _draw_nav(result, png_path, benchmark_series)
+    return nav_path, report_path, states_path, png_path, benchmark_path
+
+
+def _fmt_pct(value: float | None) -> str:
+    """百分比格式化，None 输出 ``-``。"""
+    return "-" if value is None else f"{value:.4%}"
+
+
+def _fmt_num(value: float | None, digits: int = 4) -> str:
+    """数值格式化，None 输出 ``-``。"""
+    return "-" if value is None else f"{value:.{digits}f}"
+
+
+def _render_benchmark_rows(
+    config: E2EConfig, benchmark: BenchmarkSummary
+) -> list[str]:
+    """绩效表里的基准 / 超额行。"""
+    return [
+        f"| 基准指数 | {config.benchmark} |",
+        f"| 基准 / 超额对齐交易日数 | {benchmark.n_days} |",
+        f"| 基准区间收益 | {_fmt_pct(benchmark.benchmark_total_return)} |",
+        f"| 基准年化（几何） | {_fmt_pct(benchmark.benchmark_annualized)} |",
+        "| 超额区间收益（组合归一 / 基准归一 − 1） | "
+        f"{_fmt_pct(benchmark.excess_total_return)} |",
+        "| 超额年化（日超额均值 × 252） | "
+        f"{_fmt_pct(benchmark.excess_annualized)} |",
+        "| 跟踪误差（超额日收益 std × √252） | "
+        f"{_fmt_pct(benchmark.tracking_error)} |",
+        "| 信息比率（超额年化 / 跟踪误差） | "
+        f"{_fmt_num(benchmark.information_ratio)} |",
+    ]
 
 
 def render_report(
@@ -688,8 +786,9 @@ def render_report(
     stats: SignalStats,
     metrics: dict[str, Any],
     train_config: TrainConfig | None,
+    benchmark: BenchmarkSummary | None = None,
 ) -> str:
-    """渲染 ``report.md``：头部配置 + 绩效 + 成交 / 拒单 / 公司行为统计。"""
+    """渲染 ``report.md``：头部配置 + 绩效（含基准 / 超额）+ 成交 / 拒单 / 公司行为统计。"""
     lines: list[str] = []
     lines.append("# 端到端回测报告（issue #16）")
     lines.append("")
@@ -708,6 +807,7 @@ def render_report(
         ("initial_cash", f"{config.initial_cash:.2f}"),
         ("top_k", str(config.top_k)),
         ("lookback_days", str(config.lookback_days)),
+        ("benchmark", config.benchmark or "（未指定）"),
         ("out_dir", str(config.out_dir)),
     ]
     if train_config is not None:
@@ -743,7 +843,17 @@ def render_report(
     lines.append(f"| 成交笔数 | {metrics['n_fills']} |")
     lines.append(f"| 拒单笔数 | {metrics['n_rejects']} |")
     lines.append(f"| 公司行为处理笔数 | {metrics['n_corporate_actions']} |")
+    if benchmark is not None:
+        lines.extend(_render_benchmark_rows(config, benchmark))
     lines.append("")
+
+    if benchmark is not None:
+        lines.append(
+            "基准 nav 与组合归一净值均以期初（首个共同交易日）归一为 1.0，"
+            "`excess_nav = 组合归一净值 / 基准归一净值`；`benchmark.parquet` 落盘对齐序列。"
+            "净值图中基准曲线乘以初始资金，与组合 nav 同轴对比。"
+        )
+        lines.append("")
 
     lines.append("### 拒单原因 Top")
     lines.append("")
@@ -916,8 +1026,13 @@ def _reconstruct_positions(
     return snapshots
 
 
-def _draw_nav(result: BacktestResult, path: Path) -> None:
-    """画净值曲线（Agg 后端，不弹窗）。"""
+def _draw_nav(
+    result: BacktestResult, path: Path, benchmark_series: pl.DataFrame | None = None
+) -> None:
+    """画净值曲线（Agg 后端，不弹窗）；给了基准序列则叠加基准曲线。
+
+    基准以 ``benchmark_nav × 初始资金`` 与组合 nav 同轴对比。
+    """
     nav = result.nav
     if nav.height == 0:
         figure, axes = plt.subplots(figsize=(10, 4.5))
@@ -928,7 +1043,21 @@ def _draw_nav(result: BacktestResult, path: Path) -> None:
     dates = nav[DATE_COL].to_list()
     values = nav["nav"].to_list()
     figure, axes = plt.subplots(figsize=(10, 4.5))
-    axes.plot(dates, values, linewidth=1.2, color="#1f77b4")
+    axes.plot(dates, values, linewidth=1.2, color="#1f77b4", label="portfolio")
+    if benchmark_series is not None and benchmark_series.height:
+        benchmark_dates = benchmark_series[DATE_COL].to_list()
+        benchmark_values = [
+            value * result.initial_cash
+            for value in benchmark_series[BENCHMARK_NAV_COL].to_list()
+        ]
+        axes.plot(
+            benchmark_dates,
+            benchmark_values,
+            linewidth=1.0,
+            color="#ff7f0e",
+            label="benchmark (scaled to initial cash)",
+        )
+        axes.legend(loc="best")
     axes.set_title("E2E Backtest NAV")
     axes.set_ylabel("NAV (CNY)")
     axes.grid(True, alpha=0.3)
@@ -986,6 +1115,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="训练配置 JSON 路径，默认取 model-dir 同级约定",
     )
+    parser.add_argument(
+        "--benchmark",
+        default=None,
+        help="基准指数代码（六位，如 000905），给了就输出基准 / 超额绩效与净值叠加",
+    )
     return parser
 
 
@@ -1005,6 +1139,14 @@ def _print_summary(result: E2EResult) -> None:
     if metrics["reject_reasons"]:
         top = ", ".join(f"{k}={v}" for k, v in metrics["reject_reasons"].items())
         print(f"拒单原因：{top}")
+    if result.benchmark is not None:
+        bench = result.benchmark
+        print(
+            f"基准 {result.config.benchmark}：年化 {_fmt_pct(bench.benchmark_annualized)}    "
+            f"超额年化 {_fmt_pct(bench.excess_annualized)}    "
+            f"跟踪误差 {_fmt_pct(bench.tracking_error)}    "
+            f"IR {_fmt_num(bench.information_ratio)}"
+        )
     print(
         f"优化：求解 {result.stats.optimize_calls} 次，放宽成功 {result.stats.relaxed_success} 次，"
         f"保持现状 {result.stats.hold_fallback} 次"
@@ -1013,6 +1155,8 @@ def _print_summary(result: E2EResult) -> None:
     print(f"报告：{result.report_path}")
     print(f"账户抽样：{result.states_path}")
     print(f"净值图：{result.png_path}")
+    if result.benchmark_path is not None:
+        print(f"基准序列：{result.benchmark_path}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1038,6 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
         factor_library_dir=Path(args.factor_library),
         horizon=args.horizon,
         train_config_path=Path(args.train_config) if args.train_config else None,
+        benchmark=args.benchmark,
     )
     result = run_e2e(config)
     _print_summary(result)
