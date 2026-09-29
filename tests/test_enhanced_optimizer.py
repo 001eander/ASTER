@@ -15,10 +15,13 @@ import numpy as np
 import pytest
 
 from quant.portfolio.enhanced import (
+    FINAL_TIER_FLAG,
+    MAX_RELAX_ROUNDS_DEFAULT,
     STATUS_DRIFT,
     STATUS_HELD,
     STATUS_OPTIMAL,
     STATUS_RELAXED,
+    TURNOVER_FREE_MAX,
     EnhancedDayInput,
     EnhancedOptimizer,
     drift_weights,
@@ -265,12 +268,82 @@ def test_relaxation_relaxes_style_before_turnover() -> None:
 
 
 def test_failure_holds_previous_weights() -> None:
+    """求解器不可用（终局台阶也无法求解）时保持上期权重，relax_rounds 记 59。"""
     u = _universe(seed=8)
     far = {inst: 1.0 / len(u["instruments"]) for inst in u["instruments"]}
-    result = _optimize(u, opt=EnhancedOptimizer(turnover_max=0.0), w_prev=far)
+    result = _optimize(
+        u,
+        opt=EnhancedOptimizer(turnover_max=0.0, solver="__no_such_solver__"),
+        w_prev=far,
+    )
     assert result.status == STATUS_HELD
     assert result.relax_rounds == 59
     assert result.weights == pytest.approx(far, abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# 终局台阶（issue #71）
+# ---------------------------------------------------------------------------
+
+
+def test_final_tier_recovers_when_turnover_only_blocks() -> None:
+    """唯一阻碍是换手约束时，终局台阶取消换手后产出解（status=relaxed）。"""
+    u = _universe(seed=8)
+    far = {inst: 1.0 / len(u["instruments"]) for inst in u["instruments"]}
+    result = _optimize(u, opt=EnhancedOptimizer(turnover_max=0.0), w_prev=far)
+
+    assert result.status == STATUS_RELAXED
+    assert result.relax_rounds == MAX_RELAX_ROUNDS_DEFAULT
+    assert result.thresholds[FINAL_TIER_FLAG] is True
+    assert result.thresholds["turnover"] == pytest.approx(TURNOVER_FREE_MAX)
+    # 终局台阶回到初始阈值：个股带仍守住（否则等于放弃了约束）。
+    norm = _bench_norm(u)
+    for i, inst in enumerate(u["instruments"]):
+        weight = result.weights.get(inst, 0.0)
+        if norm[i] > 0:
+            assert weight <= norm[i] + 0.005 + 1e-4
+            assert weight >= norm[i] - 0.005 - 1e-4
+        else:
+            assert weight <= 0.005 + 1e-4
+
+
+def test_final_tier_not_used_when_ladder_solves() -> None:
+    """常规放松能解出时不得触发终局台阶，阈值里没有标记位。"""
+    u = _universe(seed=1)
+    result = _optimize(u)
+    assert result.status == STATUS_OPTIMAL
+    assert FINAL_TIER_FLAG not in result.thresholds
+    assert result.thresholds["turnover"] == pytest.approx(0.2)
+
+
+def test_final_tier_failure_keeps_held() -> None:
+    """终局台阶也解不出（求解器不可用）时仍是 held。"""
+    u = _universe(seed=9)
+    far = {inst: 1.0 / len(u["instruments"]) for inst in u["instruments"]}
+    result = _optimize(
+        u,
+        opt=EnhancedOptimizer(solver="__no_such_solver__"),
+        w_prev=far,
+    )
+    assert result.status == STATUS_HELD
+    assert result.relax_rounds == 59
+    assert FINAL_TIER_FLAG not in result.thresholds
+
+
+def test_held_exposures_are_normalized() -> None:
+    """held 分支暴露按归一权重算：权重和小于 1 时覆盖度不随现金比例缩水。"""
+    u = _universe(seed=15)
+    bench_norm = _bench_norm(u)
+    # 只有一半权重落在候选集里的「漂移后持仓」（模拟现金 / 取整残差）。
+    half = {inst: 0.5 * float(bench_norm[i]) for i, inst in enumerate(u["instruments"])}
+    result = _optimize(
+        u,
+        opt=EnhancedOptimizer(turnover_max=0.0, solver="__no_such_solver__"),
+        w_prev=half,
+    )
+    assert result.status == STATUS_HELD
+    assert sum(result.weights.values()) == pytest.approx(1.0, abs=1e-12)
+    assert result.exposures["cover_rate"] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_drift_weights_normalizes_and_handles_missing() -> None:
@@ -300,14 +373,14 @@ def test_run_drifts_on_failure() -> None:
         covariance=u["covariance"],
         interval_returns=returns,
     )
-    # 用上一个日的结果当作已持仓，再以零换手预算触发失败。
-    optimizer = EnhancedOptimizer(turnover_max=0.0)
+    # 用上一个日的结果当作已持仓，再以零换手预算触发失败（求解器不可用模拟终局台阶也失败）。
+    optimizer = EnhancedOptimizer(turnover_max=0.0, solver="__no_such_solver__")
     first = optimizer.run(
         [
             EnhancedDayInput(**{**day.__dict__, "interval_returns": {}}),
         ]
     )
-    assert first[0].status in {STATUS_OPTIMAL, STATUS_RELAXED, STATUS_HELD}
+    assert first[0].status == STATUS_HELD
     held = drift_weights(far, returns)
     result = _optimize(u, opt=optimizer, w_prev=held)
     assert result.status == STATUS_HELD
@@ -506,7 +579,12 @@ def _fixture_kwargs(inputs: dict[str, Any], sample: dict[str, Any]):
     "sample_name", ["optimal", "relaxed", "tight_cover", "infeasible"]
 )
 def test_parity_with_prototype(sample_name: str) -> None:
-    """同参数下与原型逐日解偏差 < 1e-4，放松轮次与阈值一致。"""
+    """同参数下与原型逐日解偏差 < 1e-4，放松轮次与阈值一致。
+
+    ``infeasible`` 样本的**唯一**不可行源是换手约束（原型在 59 轮放松后 held）。issue #71
+    加了终局台阶：取消换手约束再解一次，该样本因此变为 ``relaxed``（``relax_rounds`` 记
+    ``max_relax_rounds``）。60 轮内的放松语义与阈值推进不受影响，其余三个样本逐位一致。
+    """
     if not (FIXTURE_DIR / "expected.json").exists():
         pytest.skip("缺少对拍 fixture")
     inputs, expected = _load_fixture()
@@ -524,7 +602,15 @@ def test_parity_with_prototype(sample_name: str) -> None:
         date=date(2025, 1, 2), **_fixture_kwargs(inputs, sample)
     )
 
+    if sample_name == "infeasible":
+        assert sample["relax_rounds"] == 59
+        assert result.relax_rounds == MAX_RELAX_ROUNDS_DEFAULT
+        assert result.status == STATUS_RELAXED
+        assert result.thresholds[FINAL_TIER_FLAG] is True
+        return
+
     assert result.relax_rounds == sample["relax_rounds"]
+    assert FINAL_TIER_FLAG not in result.thresholds
     if sample["status"] == 1:
         assert result.status in {STATUS_OPTIMAL, STATUS_RELAXED}
         ours = np.array(

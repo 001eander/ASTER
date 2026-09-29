@@ -37,9 +37,11 @@ from quant.data.index_history import (
     reconstruct_snapshots,
 )
 from quant.data.index_members import (
+    INDEX_WEIGHTS_FILE,
     build_daily_tables,
     drift_weights,
     expand_member_snapshots,
+    index_weights_on,
     merge_weight_anchors,
     read_anchor_weights,
     read_drift_check,
@@ -388,6 +390,25 @@ def test_read_index_weights_missing_file_returns_empty(tmp_path: Path) -> None:
     out = read_index_weights(tmp_path)
     assert out.height == 0
     assert out.columns == list(INDEX_WEIGHTS.keys())
+
+
+def test_index_weights_on_missing_index_returns_truly_empty(tmp_path: Path) -> None:
+    """回归：``index_weights_on`` 的空表必须是 0 行，而不是 1 行 dtype 对象。"""
+    _write_base_cache(tmp_path, OPEN)
+    pl.DataFrame(
+        [_anchor(date(2024, 6, 3), "600000.SH", 1.0, index_code="000852")],
+        schema=INDEX_WEIGHTS,
+    ).write_parquet(tmp_path / INDEX_WEIGHTS_FILE)
+    out = index_weights_on(tmp_path, "000905", date(2024, 6, 3))
+    assert out.height == 0
+    assert out.columns == ["instrument", "weight"]
+    assert dict(out.schema) == {"instrument": pl.String, "weight": pl.Float64}
+    # 早于首条记录同样返回 0 行
+    before = index_weights_on(tmp_path, "000852", date(2023, 1, 3))
+    assert before.height == 0
+    # 有记录时正常返回
+    hit = index_weights_on(tmp_path, "000852", date(2024, 6, 4))
+    assert hit.to_dicts() == [{"instrument": "600000.SH", "weight": 1.0}]
 
 
 class _FakeAnchorSource:

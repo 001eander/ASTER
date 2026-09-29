@@ -25,7 +25,9 @@
 --------
 1. 可行性预检 ``Minimize(0)`` 同约束求解；不可行进入放松阶梯。
 2. 放松阶梯顺序：风格 → 行业/市值 → 换手，步长入配置，最多 ``max_relax_rounds`` 轮。
-3. 放松后仍不可行：保持持仓，当日权重按漂移结果记录日志。
+3. 放松用尽仍不可行时进入**终局台阶**（issue #71）：回到初始阈值、只把换手上限放到
+   :data:`TURNOVER_FREE_MAX` 再解一次，打断「held → 漂移更远 → 更不可行」的自锁；
+   台阶仍不可行才保持持仓，当日权重按漂移结果记录日志。
 4. 调仓频率 ``D/W/M``，非调仓日权重按区间收益漂移（``drift_weights``）。
 5. 优化日志逐日产出在 :class:`EnhancedResult.log`，落盘由调用方负责
    （本模块不发 IO，:func:`logs_to_frame` 汇总为 polars 表）。
@@ -37,6 +39,7 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -50,6 +53,8 @@ import polars as pl
 
 from quant.portfolio.risk import ledoit_wolf_covariance
 from quant.portfolio.style import STYLE_FACTOR_NAMES
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 配置（默认值集中在此）
@@ -87,6 +92,11 @@ MAX_RELAX_ROUNDS_DEFAULT: int = 60
 FULL_INVESTMENT_TOL: float = 1e-4
 #: 求解结果中绝对值小于该阈值的权重视为约 0 并剔除。
 ZERO_TOL_DEFAULT: float = 1e-4
+
+#: 终局台阶的换手上限：长多组合 ``|w − w_prev|₁ ≤ Σw + Σw_prev ≤ 2``，取 2.0 等价于取消换手约束。
+TURNOVER_FREE_MAX: float = 2.0
+#: 终局台阶在阈值字典里留下的标记键。
+FINAL_TIER_FLAG: str = "final_turnover_free"
 
 #: 调仓频率 → 交易日步长（沿用原型的 ``[::1] / [::5] / [::20]``）。
 REBALANCE_STRIDE: dict[str, int] = {"D": 1, "W": 5, "M": 20}
@@ -136,9 +146,11 @@ class EnhancedResult:
         成功求解前施加的放松次数；与原型日志的 ``relax_constraints_count``
         对齐（``0`` 表示首次即成功）。全程失败时为 ``max_relax_rounds − 1``。
     thresholds:
-        求解时的约束阈值字典；失败时为最后一轮放松后的阈值。
+        求解时的约束阈值字典；失败时为最后一轮放松后的阈值，终局台阶命中时含
+        ``turnover = 2.0`` 与 :data:`FINAL_TIER_FLAG` 标记。
     exposures:
-        实际暴露明细，见 :func:`compute_exposures`。
+        实际暴露明细，见 :func:`compute_exposures`。口径统一为**归一后的持仓**
+        （``Σw = 1``）：求解分支即目标权重，held 分支为漂移后持仓的归一权重。
     turnover:
         当日双边换手；非调仓 / 失败日为 0，首次建仓日按原型取 1.0。
     objective:
@@ -150,7 +162,7 @@ class EnhancedResult:
     weights: dict[str, float]
     status: str
     relax_rounds: int
-    thresholds: dict[str, float]
+    thresholds: dict[str, Any]
     exposures: dict[str, Any]
     turnover: float
     objective: float | None
@@ -318,7 +330,10 @@ class EnhancedOptimizer:
         solved, relax_rounds, used = self._solve_with_relaxation(data, thresholds)
 
         if solved is None:
-            held = {inst: float(w) for inst, w in zip(insts, data.prev) if w > 0}
+            held_raw = {inst: float(w) for inst, w in zip(insts, data.prev) if w > 0}
+            # 暴露口径统一到「归一后的持仓」：求解分支的权重和恒为 1，held 分支的漂移权重
+            # 和可能小于 1（现金 / 未落地的取整残差），不归一会让覆盖度与带偏离无法横向比较。
+            held = _normalize(held_raw)
             exposures = compute_exposures(
                 held,
                 bench_weights=bench_weights,
@@ -443,16 +458,24 @@ class EnhancedOptimizer:
 
     def _solve_with_relaxation(
         self, data: _ProblemData, thresholds: dict[str, float]
-    ) -> tuple[tuple[np.ndarray, np.ndarray, float] | None, int, dict[str, float]]:
-        """预检 + 放松循环。
+    ) -> tuple[tuple[np.ndarray, np.ndarray, float] | None, int, dict[str, Any]]:
+        """预检 + 放松循环 + 终局台阶。
 
-        返回 ``((原始解, 归一解, 目标值), 放松轮数, 所用阈值)``；失败时首项为 ``None``。
+        返回 ``((原始解, 归一解, 目标值), 放松轮数, 所用阈值)``；全程失败时首项为 ``None``。
         放松轮数与原型日志的 ``relax_constraints_count`` 对齐。
+
+        终局台阶（issue #71）：``max_relax_rounds`` 轮放松用尽仍不可行时，回到**初始阈值**
+        只把换手上限放到 :data:`TURNOVER_FREE_MAX`（等价取消换手约束）再解一次。这是为了
+        打断「不可行 → held → 漂移更远 → 更不可行」的自锁：恢复持仓回到带内所需的换手
+        可能超过换手约束允许的上限，此时唯一出路是先允许偏离再收敛。命中台阶时状态记
+        :data:`STATUS_RELAXED`、``relax_rounds`` 记 ``max_relax_rounds``，阈值字典带
+        :data:`FINAL_TIER_FLAG` 标记。台阶仍不可行才返回 held 语义（首项 ``None``）。
         """
         w = cp.Variable(data.n)
         if data.bench_norm.sum() > 0:
             w.value = data.bench_norm
         objective = _build_objective(w, data)
+        initial = dict(thresholds)
         current = dict(thresholds)
         constraints = _build_constraints(w, data, current)
 
@@ -467,6 +490,20 @@ class EnhancedOptimizer:
                     return (raw, full, float(objective.value)), count, current
             current = self._relax(current, count)
             constraints = _build_constraints(w, data, current)
+
+        final_tier = dict(initial)
+        final_tier["turnover"] = TURNOVER_FREE_MAX
+        final_tier[FINAL_TIER_FLAG] = True
+        constraints = _build_constraints(w, data, final_tier)
+        if self._check_feasibility(constraints):
+            raw = self._solve_problem(w, objective, constraints)
+            if raw is not None:
+                full = _finalize(raw, self.zero_tol)
+                return (
+                    (raw, full, float(objective.value)),
+                    self.max_relax_rounds,
+                    final_tier,
+                )
         return None, max(0, self.max_relax_rounds - 1), current
 
     def _solve_problem(
@@ -875,18 +912,34 @@ def _finalize(raw: np.ndarray, zero_tol: float) -> np.ndarray:
     return full / total
 
 
+def _normalize(weights: Mapping[str, float]) -> dict[str, float]:
+    """把权重归一到和为 1；总和非正时返回空字典。"""
+    total = float(sum(weights.values()))
+    if not math.isfinite(total) or total <= 0.0:
+        return {}
+    return {inst: float(w) / total for inst, w in weights.items() if w > 0.0}
+
+
+def _thresholds_dict(thresholds: Mapping[str, Any]) -> dict[str, Any]:
+    """阈值字典落日志：数值取 float，标记位（如 :data:`FINAL_TIER_FLAG`）原样保留。"""
+    out: dict[str, Any] = {}
+    for key, value in thresholds.items():
+        out[key] = value if isinstance(value, bool) else float(value)
+    return out
+
+
 def _make_result(
     *,
     date: Date,
     weights: dict[str, float],
     status: str,
     relax_rounds: int,
-    thresholds: Mapping[str, float],
+    thresholds: Mapping[str, Any],
     exposures: dict[str, Any],
     turnover: float,
     objective: float | None,
 ) -> EnhancedResult:
-    thresholds_dict = {k: float(v) for k, v in thresholds.items()}
+    thresholds_dict = _thresholds_dict(thresholds)
     log = {
         "date": date,
         "status": status,
@@ -914,6 +967,7 @@ __all__ = [
     "EnhancedDayInput",
     "EnhancedOptimizer",
     "EnhancedResult",
+    "FINAL_TIER_FLAG",
     "FULL_INVESTMENT_TOL",
     "INDUSTRY_EXPOSURE_DEFAULT",
     "LAMBDA_DEFAULT",
@@ -929,6 +983,7 @@ __all__ = [
     "STATUS_RELAXED",
     "STOCK_BAND_DEFAULT",
     "STYLE_EXPOSURE_DEFAULT",
+    "TURNOVER_FREE_MAX",
     "TURNOVER_MAX_DEFAULT",
     "compute_exposures",
     "drift_weights",

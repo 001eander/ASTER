@@ -417,7 +417,7 @@ def index_weights_on(data_dir: Path, index_code: str, day: date) -> pl.DataFrame
     表内没有该指数、或该指数没有不晚于 ``day`` 的记录时返回零行同 schema 表。
     无前视：只用 ``date <= day`` 的权重。
     """
-    empty = pl.DataFrame({"instrument": pl.String, "weight": pl.Float64})
+    empty = pl.DataFrame(schema={"instrument": pl.String, "weight": pl.Float64})
     weights = read_index_weights(data_dir)
     if weights.height == 0:
         return empty
