@@ -14,6 +14,8 @@ export type FactorDirection = {
 
 export type FactorRegistryEntry = {
   factorId: string;
+  // 因子的经济假设原文；Proposal 摘要注入要用，registry 里缺失时给空串。
+  hypothesis: string;
   direction: FactorDirection;
   rankIc: number | null;
   status: string;
@@ -238,6 +240,7 @@ function parseFactorEntry(raw: unknown): FactorRegistryEntry | null {
     : null;
   return {
     factorId: obj.factor_id,
+    hypothesis: typeof obj.hypothesis === "string" ? obj.hypothesis : "",
     direction,
     rankIc,
     status: typeof obj.status === "string" ? obj.status : "pool",
