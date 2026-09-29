@@ -48,6 +48,7 @@ import polars as pl
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    HISTORY_START,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
     check_daily_bars,
@@ -63,7 +64,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 #: ``fetch_full`` / ``update_daily`` 的默认起始日（CLI 默认值同此）。
-DEFAULT_START: date = date(2015, 1, 1)
+#: 全系统历史起点 = CSMAR 建库窗口首日 2021-09-29（issue #59）。
+DEFAULT_START: date = HISTORY_START
 
 CALENDAR_FILE: str = "calendar.parquet"
 INSTRUMENTS_FILE: str = "instruments.parquet"

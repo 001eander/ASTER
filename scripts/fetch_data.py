@@ -2,7 +2,7 @@
 
 用法::
 
-    # 全市场首抓（默认 2015-01-01 至今，含公司行为）
+    # 全市场首抓（默认自 DEFAULT_START（全系统历史起点）至今，含公司行为）
     ASTER_NO_PROXY=1 uv run python scripts/fetch_data.py
 
     # 调试：只抓两只票

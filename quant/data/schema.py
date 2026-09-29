@@ -10,11 +10,16 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Literal
 
 import polars as pl
 
 Board = Literal["main", "cyb", "kcb", "bj"]
+
+#: 全系统历史起点 = CSMAR 日线建库窗口首日（issue #59）。
+#: 该日之前的 akshare 缓存弃用，日期序列型计算（回测、标签、因子）一律从此日起。
+HISTORY_START: date = date(2021, 9, 29)
 
 # ---------------------------------------------------------------------------
 # 证券代码
