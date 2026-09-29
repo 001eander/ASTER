@@ -49,6 +49,40 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 `{"op": "seed", "parents": [], "run_id": null, "generation": 0}`，自动挖掘产出的
 因子填写父因子 id、产出 run 与代数。
 
+## 定期整库
+
+注册表只增不减，同一信号的换皮变体会稀释建模数据集。整库把「池内留谁」写成可复算的
+规则，代码在 `quant/factor_lib/prune.py`，按需手动跑，不挂在 daily pipeline 上：
+
+```bash
+# 先干跑，只打印计划不写盘
+uv run python scripts/prune_factor_library.py --dry-run
+
+# 只看某段窗口的相关性，确认后写回
+uv run python scripts/prune_factor_library.py --start 2023-01-01 --end 2024-12-31
+```
+
+参数：`--data-dir`（默认 `data`）、`--factor-library-dir`（默认 `factor_library`）、
+`--start` / `--end`（相关性窗口，默认全样本）、`--dry-run`。被降级的条目改写成
+`status: graveyard`，留在库里保留血统，不再参与建模。
+
+两条规则，先聚簇后容量：
+
+1. **聚簇降级**：pool 因子两两算逐日截面相关的时间序列均值，`|corr| > 0.7`
+   （复用入库查重阈值 `MAX_CORR_REJECT`，负相关同样入簇）的因子连边，连通分量为一个
+   簇；每簇只留 `metrics.rank_ic` 最高的一个。`rank_ic` 为 null 视为最弱，并列依次比
+   `icir`、`factor_id` 字典序，计划确定可复现。
+2. **容量上限**：pool 因子数不超过库内总条目数（pool 加 graveyard）的一半，向下取整；
+   聚簇后仍超限时，按同一质量排序继续降级最弱者。例：13 个种子因子、无 graveyard 时
+   上限为 6，第一轮会降 7 个。
+
+`rank_ic` 当前多为 null，容量规则会把「未评估」也按最弱处理，所以整库前应先用
+`scripts/eval_baseline_factors.py` / `quant.eval.factor` 把 `metrics` 补上。
+
+退出码：0 表示计划算出（含无需整库与干跑），1 表示读不到行情，2 表示 registry 缺失或
+非法。规则幂等，整库后重跑计划为空。库内总条目数不足 2 时上限为 0（`floor(0.5)`），
+脚本会额外提示，此时写盘会清空 pool。
+
 ## 因子清单
 
 | 因子 | 类别 | 经济假设 | 窗口 | 使用字段 |
@@ -67,4 +101,5 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 | `vwap_bias` | 其他 | 收盘对当日 VWAP 的偏离，度量日内资金强弱 | 无 | close, vwap |
 | `vol_ratio_5_20_neg` | 量能 | 5/20 日均量比取负，缩量做多（M2 内循环冒烟首个入库因子） | 5 / 20 | volume |
 
-评估脚本见 `scripts/eval_baseline_factors.py`，测试见 `tests/test_baseline_factors.py`。
+评估脚本见 `scripts/eval_baseline_factors.py`，测试见 `tests/test_baseline_factors.py`；
+注册表与整库规则测试见 `tests/test_factor_lib.py` / `tests/test_factor_lib_prune.py`。
