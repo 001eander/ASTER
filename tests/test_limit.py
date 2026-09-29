@@ -111,6 +111,10 @@ def _expected(prev_close: float, ratio: float, direction: int) -> float:
         ("main", dt.date(2015, 1, 5), False, 0.10),
         ("main", dt.date(2015, 1, 5), True, 0.05),
         ("main", dt.date(2026, 1, 5), True, 0.05),
+        # 主板 ST 于 2026-07-06 起并入 10%（交易所规则变更，issue #59 实证）
+        ("main", dt.date(2026, 7, 3), True, 0.05),
+        ("main", dt.date(2026, 7, 6), True, 0.10),
+        ("main", dt.date(2026, 9, 28), True, 0.10),
         # 创业板改革前
         ("cyb", dt.date(2020, 8, 21), False, 0.10),
         ("cyb", dt.date(2020, 8, 21), True, 0.05),
@@ -141,6 +145,16 @@ def test_limit_ratio_cyb_reform_boundary_one_day_apart() -> None:
     assert limit_ratio("cyb", after, False) == 0.20
     assert limit_ratio("cyb", before, True) == 0.05
     assert limit_ratio("cyb", after, True) == 0.20
+
+
+def test_limit_ratio_main_st_unify_boundary_one_day_apart() -> None:
+    before = dt.date(2026, 7, 3)
+    after = dt.date(2026, 7, 6)
+    assert limit_ratio("main", before, True) == 0.05
+    assert limit_ratio("main", after, True) == 0.10
+    # 非 ST 始终 10%，不受切换影响
+    assert limit_ratio("main", before, False) == 0.10
+    assert limit_ratio("main", after, False) == 0.10
 
 
 @pytest.mark.parametrize(
