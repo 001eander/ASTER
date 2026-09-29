@@ -182,41 +182,35 @@ def test_daily_bars_sorted_by_instrument_date(monkeypatch: pytest.MonkeyPatch) -
     ]
 
 
-def test_daily_bars_falls_back_to_sina(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", _boom_em)
-
-    def sina(symbol: str, adjust: str = "", **_kw: object) -> object:
-        if adjust == "hfq-factor":
-            return _pandas(
-                pl.DataFrame(
-                    {
-                        "date": [dt.date(1900, 1, 1), dt.date(2026, 9, 1)],
-                        "hfq_factor": [1.0, 2.0],
-                    }
-                )
-            )
+def test_daily_bars_prefers_sina_over_em(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 沪深首选新浪：东财也返回可用数据，但应被新浪覆盖（issue #59 源链顺序）。
+    def em(**_kw: object) -> object:
         return _pandas(
             pl.DataFrame(
                 {
-                    "date": [dt.date(2026, 9, 1)],
-                    "open": [10.0],
-                    "high": [11.5],
-                    "low": [9.5],
-                    "close": [11.0],
-                    "volume": [10_000.0],
-                    "amount": [105_000.0],
-                    "outstanding_share": [1e9],
-                    "turnover": [0.001],
+                    "日期": [dt.date(2026, 9, 1)],
+                    "开盘": [99.0],
+                    "最高": [99.5],
+                    "最低": [98.5],
+                    "收盘": [99.0],
+                    "成交量": [1.0],
+                    "成交额": [99.0],
                 }
             )
         )
 
-    monkeypatch.setattr(ak_source.ak, "stock_zh_a_daily", sina)
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", em)
+    monkeypatch.setattr(
+        ak_source.ak,
+        "stock_zh_a_daily",
+        lambda **kw: _sina_factor() if kw.get("adjust") == "hfq-factor" else _sina_raw(),
+    )
 
     out = AkshareSource().daily_bars(["000001.SZ"], dt.date(2026, 9, 1), dt.date(2026, 9, 1))
     check_schema(out, DAILY_BARS)
+    assert out["close"].to_list() == [10.5]  # 新浪值，不是东财 99.0
     assert out["adjfactor"].to_list() == [2.0]
-    assert out["volume"].to_list() == [10_000.0]  # 新浪已是股，不再换算
+    assert out["volume"].to_list() == [1000.0]  # 新浪已是股，不再换算
     assert out["vwap"].to_list() == [10.5]
 
 
@@ -552,10 +546,12 @@ def test_em_circuit_breaker_skips_em_after_threshold(
         raise RuntimeError("东财不可用")
 
     monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", counting_boom)
+    # 新浪是沪深首选，必须让它也失败，才能把回退链推进到东财。
+    monkeypatch.setattr(ak_source.ak, "stock_zh_a_daily", _raise)
     monkeypatch.setattr(
         ak_source.ak,
-        "stock_zh_a_daily",
-        lambda **kw: _sina_factor() if kw.get("adjust") == "hfq-factor" else _sina_raw(),
+        "stock_zh_a_hist_tx",
+        lambda **kw: _tx_raw() if kw["adjust"] == "" else _tx_hfq(),
     )
 
     source = AkshareSource()
@@ -563,7 +559,7 @@ def test_em_circuit_breaker_skips_em_after_threshold(
     out = source.daily_bars(instruments, dt.date(2026, 9, 1), dt.date(2026, 9, 1))
 
     assert out.height == 8
-    # 熔断后不再请求东财：底层调用数 = 阈值 × 单票重试次数，而不是逐票持续请求
+    # 新浪与东财先后熔断：东财底层调用数 = 阈值 × 单票重试次数，而不是逐票持续请求
     assert em_calls["n"] == ak_source.EM_CIRCUIT_THRESHOLD * ak_source.RETRY_TIMES
     assert source._em_consecutive_failures == ak_source.EM_CIRCUIT_THRESHOLD
 
@@ -584,7 +580,7 @@ def test_em_circuit_breaker_resets_on_success(monkeypatch: pytest.MonkeyPatch) -
     instruments = [f"60000{i}.SH" for i in range(3)]
     out = source.daily_bars(instruments, dt.date(2026, 9, 1), dt.date(2026, 9, 2))
 
-    # 前两只走回退，第三只东财恢复后直连成功，熔断计数复位
+    # 新浪首选但不可用，东财作为回退先抖动后恢复；恢复成功后熔断计数复位
     assert source._em_consecutive_failures == 0
     assert out.filter(pl.col("instrument") == "600002.SH").height == 2
 # ---------------------------------------------------------------------------
@@ -619,7 +615,7 @@ def _tx_hfq() -> object:
     )
 
 
-def test_daily_bars_falls_back_to_tx_when_em_and_sina_down(
+def test_daily_bars_falls_back_to_tx_when_sina_and_em_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(ak_source.ak, "stock_zh_a_hist", _boom_em)

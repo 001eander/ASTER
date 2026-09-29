@@ -2,10 +2,14 @@
 
 设计
 ----
-- 行情优先取东方财富 ``stock_zh_a_hist``（覆盖沪深北），失败时按交易所回退：
-  沪市 / 深市依次走新浪 ``stock_zh_a_daily``、腾讯 ``stock_zh_a_hist_tx``，
-  北交所走腾讯。回退只为在网络或接口波动时保持可用，字段口径统一在本模块内
-  归一化。每个源按实例熔断：连续失败达到阈值后跳过，恢复自动复位。
+- 沪市 / 深市行情优先取新浪 ``stock_zh_a_daily``，失败时回退东财
+  ``stock_zh_a_hist``、腾讯 ``stock_zh_a_hist_tx``；北交所走东财，失败回退腾讯
+  （新浪不支持北交所）。回退只为在网络或接口波动时保持可用，字段口径统一在本
+  模块内归一化。每个源按实例熔断：连续失败达到阈值后跳过，恢复自动复位。
+- 沪深之所以新浪优先：新浪 ``adjust="hfq-factor"`` 直接给出累乘后复权因子，与
+  CSMAR 事件乘数相对差中位 3.2e-5、最大 6.3e-4（issue #59 抽样 197 个事件），
+  而东财的 hfq 因子由「后复权收盘 / 未复权收盘」两个按分取整的价格相除得到，
+  存在非事件漂移噪声（实测 000002 同期因子从 190 漂到 442）。东财仍保留为回退源。
 - 全部网络访问都经由 akshare，返回的 ``pandas.DataFrame`` 立刻转成 polars（环境无
   pyarrow，用 :func:`_from_pandas` 按列构造），后续处理不碰 pandas。
 - 每个 akshare 调用都带有限重试与调用间隔，避免全市场抓取被限流。
@@ -248,8 +252,8 @@ def _normalize_silent(code: str) -> str | None:
 class AkshareSource:
     """akshare 数据源，满足 ``quant.data.source.base.DataSource`` 协议。
 
-    日线按交易所走「东财 → 新浪（沪深）→ 腾讯（沪深北兜底）」链；北交所为
-    「东财 → 腾讯」。实例按源熔断：某源连续抛异常达到 ``CIRCUIT_THRESHOLD``
+    日线按交易所走链：沪深为「新浪 → 东财 → 腾讯」，北交所为「东财 → 腾讯」。
+    实例按源熔断：某源连续抛异常达到 ``CIRCUIT_THRESHOLD``
     次后跳过该源，恢复成功自动复位；返回空数据（如退市票无记录）不计入失败。
     熔断状态是进程内的，跨进程重启后重新探测。
     """
@@ -289,13 +293,16 @@ class AkshareSource:
         self, instrument: str, start: date, end: date
     ) -> pl.DataFrame | None:
         digits, exchange = instrument.split(".")
-        fetchers: list[Callable[[str, str, date, date], pl.DataFrame | None]] = [
-            self._fetch_daily_em
-        ]
         if exchange in ("SH", "SZ"):
-            fetchers += [self._fetch_daily_sina, self._fetch_daily_tx]
+            # 沪深：新浪优先（hfq-factor 直接给累乘因子，精度高），东财、腾讯依次回退。
+            fetchers: list[Callable[[str, str, date, date], pl.DataFrame | None]] = [
+                self._fetch_daily_sina,
+                self._fetch_daily_em,
+                self._fetch_daily_tx,
+            ]
         else:
-            fetchers.append(self._fetch_daily_tx)
+            # 北交所：新浪不支持，东财优先、腾讯兜底。
+            fetchers = [self._fetch_daily_em, self._fetch_daily_tx]
         for fetch in fetchers:
             name = fetch.__name__
             if self._source_failures.get(name, 0) >= CIRCUIT_THRESHOLD:
