@@ -7,7 +7,8 @@
 三类检查：
 
 1. **完整性**：上市未退市证券在开市日是否有行情行（停牌允许缺行，整票无数据报警）；
-   全市场每日覆盖率；单票相邻行情之间的开市日缺口。
+   全市场每日覆盖率；单票相邻行情之间的开市日缺口；未退市证券的东财行业覆盖率
+   （issue #65，低于 :data:`INDUSTRY_COVERAGE_MIN_RATIO` 报 error，缺失清单报 warning）。
 2. **异常值**：价格非正、``high < low``、``open`` / ``close`` 越界、``vwap`` 越界、
    涨跌幅越过涨跌停带、``volume`` / ``amount`` 矛盾。
 3. **复权一致性**：``adjfactor`` 非正、跳变是否由公司行为解释、后复权因子是否非递减。
@@ -15,9 +16,10 @@
 severity 约定
 -------------
 - ``error``：数据不可能合法，调用方应硬中止。价格 / 成交量非正、``high < low``、
-  重复键、schema 不符、涨跌幅越过涨跌停带容差、``adjfactor <= 0``。
+  重复键、schema 不符、涨跌幅越过涨跌停带容差、``adjfactor <= 0``、
+  未退市证券行业覆盖率低于 :data:`INDUSTRY_COVERAGE_MIN_RATIO`。
 - ``warning``：需要人判断的。覆盖率偏低、缺口、整票无数据、``vwap`` 越界、
-  无法由公司行为解释的因子跳变、因子递减。
+  无法由公司行为解释的因子跳变、因子递减、缺行业归属的证券清单。
 
 口径与取舍
 ----------
@@ -54,6 +56,7 @@ from quant.data.limit import (
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    INDUSTRY,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
     SchemaError,
@@ -69,6 +72,8 @@ logger = logging.getLogger(__name__)
 
 #: 全市场每日行情覆盖率下限，低于此值报 warning。
 COVERAGE_MIN_RATIO: float = 0.80
+#: 未退市证券的行业覆盖率下限（issue #65），低于此值报 error。
+INDUSTRY_COVERAGE_MIN_RATIO: float = 0.99
 #: 单票相邻行情间隔超过这么多个开市日即视为缺口。
 GAP_OPEN_DAYS: int = 10
 #: 涨跌幅越过涨跌停带的容差（比例）。
@@ -361,6 +366,45 @@ def _check_completeness(
             f"最低 {worst['_ratio']:.1%}（{worst['date']} 仅 {worst['_traded']}/"
             f"{worst['_eligible']} 只）",
             low.height,
+        )
+
+
+def _check_industry_coverage(
+    issues: list[ValidationIssue],
+    instruments: pl.DataFrame,
+    industry: pl.DataFrame,
+) -> None:
+    """未退市证券的东财行业覆盖率：低于阈值报 error，缺失清单报 warning。"""
+    if instruments.height == 0:
+        return
+    active = instruments.filter(pl.col("delist_date").is_null()).select("instrument")
+    if active.height == 0:
+        return
+    known = (
+        industry.filter(pl.col("industry_l1").is_not_null())
+        .select("instrument")
+        .unique()
+    )
+    missing = active.join(known, on="instrument", how="anti").sort("instrument")
+    ratio = 1.0 - missing.height / active.height
+    if ratio < INDUSTRY_COVERAGE_MIN_RATIO:
+        _add(
+            issues,
+            "error",
+            "industry_coverage_low",
+            f"未退市证券东财行业覆盖率 {ratio:.2%} 低于 "
+            f"{INDUSTRY_COVERAGE_MIN_RATIO:.0%}："
+            f"{missing.height}/{active.height} 只没有归属",
+            missing.height,
+        )
+    if missing.height:
+        _add(
+            issues,
+            "warning",
+            "industry_uncovered",
+            f"{missing.height} 只未退市证券缺东财行业归属："
+            f"{_examples(missing, ('instrument',))}",
+            missing.height,
         )
 
 
@@ -717,6 +761,10 @@ def validate(
         issues,
         required=False,
     )
+    industry = _read_table(
+        data_dir, cache.INDUSTRY_FILE, INDUSTRY, "industry", issues
+    )
+    _check_industry_coverage(issues, instruments, industry)
 
     has_calendar = calendar.height > 0
     if lookback_days is None:
@@ -789,6 +837,7 @@ __all__ = [
     "ADJ_TOLERANCE",
     "COVERAGE_MIN_RATIO",
     "GAP_OPEN_DAYS",
+    "INDUSTRY_COVERAGE_MIN_RATIO",
     "LIMIT_TOLERANCE",
     "VWAP_TOLERANCE",
     "ValidationIssue",

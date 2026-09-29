@@ -137,6 +137,19 @@ INSTRUMENT_INFO = pl.Schema(
     }
 )
 
+#: 行业分类表（东财口径，issue #65）。``effective_from`` 为该归属的抓取日：
+#: 东财行业分类调整频率低，akshare / 东财只提供当前截面，历史段按当前截面回填，
+#: 因此该列是「已知时点」而不是「分类真正生效日」（与成分股 PIT 的严格性不同）。
+#: 同一 ``instrument`` 可以有多行，读取方取 ``effective_from`` 最大的一行。
+INDUSTRY = pl.Schema(
+    {
+        "instrument": pl.String,
+        "industry_l1": pl.String,
+        "industry_l2": pl.String,
+        "effective_from": pl.Date,
+    }
+)
+
 
 class SchemaError(ValueError):
     """数据表与约定 schema 不符。"""
@@ -177,3 +190,13 @@ def check_index_bars(df: pl.DataFrame, *, name: str = "index_bars") -> None:
         raise SchemaError(f"{name} 存在重复的 (index_code, date)")
     if not df.equals(df.sort(key)):
         raise SchemaError(f"{name} 未按 (index_code, date) 排序")
+
+
+def check_industry(df: pl.DataFrame, *, name: str = "industry") -> None:
+    """行业表的额外约定：按 (instrument, effective_from) 排序，同键不重复。"""
+    check_schema(df, INDUSTRY, name=name)
+    key = ["instrument", "effective_from"]
+    if df.select(key).is_duplicated().any():
+        raise SchemaError(f"{name} 存在重复的 (instrument, effective_from)")
+    if not df.equals(df.sort(key)):
+        raise SchemaError(f"{name} 未按 (instrument, effective_from) 排序")

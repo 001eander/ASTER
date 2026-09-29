@@ -15,6 +15,7 @@ import pytest
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    INDUSTRY,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
 )
@@ -94,6 +95,7 @@ def _write_cache(
     days: list[date] | None = None,
     instruments: list[dict[str, object]] | None = None,
     actions: list[dict[str, object]] | None = None,
+    industry: list[dict[str, object]] | None = None,
 ) -> Path:
     days = days or DAYS
     bars_dir = tmp_path / "bars"
@@ -116,15 +118,36 @@ def _write_cache(
         {"date": span, "is_open": [item in openset for item in span]}
     ).cast(TRADE_CALENDAR).write_parquet(tmp_path / "calendar.parquet")
 
-    pl.DataFrame(
-        instruments if instruments is not None else _instrument_rows(),
-        schema=INSTRUMENT_INFO,
-    ).write_parquet(tmp_path / "instruments.parquet")
+    inst_rows = instruments if instruments is not None else _instrument_rows()
+    pl.DataFrame(inst_rows, schema=INSTRUMENT_INFO).write_parquet(
+        tmp_path / "instruments.parquet"
+    )
 
     pl.DataFrame(actions or [], schema=CORPORATE_ACTIONS).write_parquet(
         tmp_path / "corporate_actions.parquet"
     )
+    industry_rows = (
+        industry if industry is not None else _industry_rows(inst_rows)
+    )
+    pl.DataFrame(industry_rows, schema=INDUSTRY).write_parquet(
+        tmp_path / "industry.parquet"
+    )
     return tmp_path
+
+
+def _industry_rows(
+    instruments: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """给每只在册证券一行行业归属，默认全覆盖。"""
+    return [
+        {
+            "instrument": row["instrument"],
+            "industry_l1": "信息技术",
+            "industry_l2": "半导体",
+            "effective_from": date(2024, 1, 1),
+        }
+        for row in instruments
+    ]
 
 
 def _apply(
@@ -354,6 +377,73 @@ def test_short_gap_not_flagged(tmp_path: Path) -> None:
     bars = [row for row in _base_bars() if row["date"] != DAYS[3] or row["instrument"] == _CYB]
     report = validate(_write_cache(tmp_path, bars))
     assert "date_gap" not in _checks(report)
+
+
+# ---------------------------------------------------------------------------
+# 行业覆盖率（issue #65）
+# ---------------------------------------------------------------------------
+
+
+def _many_instruments(count: int) -> list[dict[str, object]]:
+    return [
+        {
+            "instrument": f"{600000 + index:06d}.SH",
+            "name": f"测试{index}",
+            "board": "main",
+            "list_date": date(2023, 12, 1),
+            "delist_date": None,
+        }
+        for index in range(count)
+    ]
+
+
+def test_industry_low_coverage_is_error(tmp_path: Path) -> None:
+    instruments = _instrument_rows()
+    industry = _industry_rows(instruments)[:1]  # 只覆盖 2 只中的 1 只
+    report = validate(
+        _write_cache(tmp_path, _base_bars(), industry=industry),
+    )
+    assert not report.ok
+    assert _severity(report, "industry_coverage_low") == "error"
+    assert _severity(report, "industry_uncovered") == "warning"
+
+
+def test_industry_one_missing_of_many_is_warning_only(tmp_path: Path) -> None:
+    instruments = _many_instruments(200)
+    industry = _industry_rows(instruments)[:199]  # 99.5% >= 99%
+    report = validate(
+        _write_cache(tmp_path, [], instruments=instruments, industry=industry),
+    )
+    assert report.ok
+    assert "industry_coverage_low" not in _checks(report)
+    assert _severity(report, "industry_uncovered") == "warning"
+
+
+def test_industry_ignores_delisted_instruments(tmp_path: Path) -> None:
+    instruments = _instrument_rows()
+    instruments.append(
+        {
+            "instrument": "600002.SH",
+            "name": "退市测试",
+            "board": "main",
+            "list_date": date(2020, 1, 1),
+            "delist_date": date(2023, 12, 31),
+        }
+    )
+    industry = _industry_rows(_instrument_rows())  # 只覆盖未退市的两只
+    report = validate(
+        _write_cache(tmp_path, _base_bars(), instruments=instruments, industry=industry),
+    )
+    assert "industry_coverage_low" not in _checks(report)
+    assert "industry_uncovered" not in _checks(report)
+
+
+def test_industry_file_missing_is_error(tmp_path: Path) -> None:
+    data_dir = _write_cache(tmp_path, _base_bars())
+    (data_dir / "industry.parquet").unlink()
+    report = validate(data_dir)
+    assert not report.ok
+    assert _severity(report, "industry_missing") == "error"
 
 
 # ---------------------------------------------------------------------------

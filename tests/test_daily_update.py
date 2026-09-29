@@ -21,6 +21,7 @@ from quant.data.cache import (
     load_bars,
     load_corporate_actions,
     load_index_bars,
+    load_industry,
 )
 from quant.data.limit import ST_INTERVALS
 from quant.data.schema import (
@@ -108,12 +109,14 @@ class FakeSource:
         info: pl.DataFrame | None = None,
         actions: dict[str, list[dict[str, object]]] | None = None,
         index_rows: dict[str, list[dict[str, object]]] | None = None,
+        industry: list[dict[str, object]] | None = None,
         fail: set[str] | None = None,
     ) -> None:
         self._bars = bars or {}
         self._info = info if info is not None else pl.DataFrame(schema=INSTRUMENT_INFO)
         self._actions = actions or {}
         self._index_rows = index_rows or {}
+        self._industry = industry
         self._fail = set(fail or ())
         self.bar_calls: list[tuple[str, date, date]] = []
         self.ca_calls: list[tuple[str, date, date]] = []
@@ -175,6 +178,22 @@ class FakeSource:
             return pl.DataFrame(schema=INDEX_BARS)
         return pl.DataFrame(rows, schema=INDEX_BARS).sort(["index_code", "date"])
 
+    def industry_classification(self) -> pl.DataFrame:
+        schema = {
+            "instrument": pl.String,
+            "industry_l1": pl.String,
+            "industry_l2": pl.String,
+        }
+        rows = self._industry
+        if rows is None:
+            rows = [
+                {"instrument": item, "industry_l1": "信息技术", "industry_l2": "半导体"}
+                for item in self._info["instrument"].to_list()
+            ]
+        if not rows:
+            return pl.DataFrame(schema=schema)
+        return pl.DataFrame(rows, schema=schema).sort("instrument")
+
 
 def _write_empty_st(data_dir: Path) -> None:
     """预置空 ST 区间缓存，让重算涨跌停时不触网。"""
@@ -222,6 +241,14 @@ def test_daily_update_main_flow(tmp_path: Path) -> None:
     assert result.ca.ca_empty == 1
     assert result.limit_years == {2026: 2}
     assert result.latest_data_date == date(2026, 1, 2)
+
+    # 行业阶段（issue #65）：按 effective_end 落一份快照，覆盖全部未退市证券。
+    assert result.industry.refreshed
+    assert result.industry.effective_from == date(2026, 1, 2)
+    assert result.industry.missing == 0
+    assert result.industry.coverage == 1.0
+    assert result.timings["industry"] >= 0.0
+    assert load_industry(tmp_path).height == 2
 
     loaded = load_bars(tmp_path)
     assert loaded["date"].max() == date(2026, 1, 2)

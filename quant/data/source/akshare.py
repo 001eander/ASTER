@@ -62,6 +62,8 @@ from typing import TypeVar
 import akshare as ak
 import polars as pl
 
+from akshare.utils.request import request_with_retry
+
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
@@ -105,6 +107,27 @@ INDEX_SINA_SYMBOLS: dict[str, str] = {
     "000905": "sh000905",
     "000852": "sh000852",
 }
+
+#: 东财 F10 公司概况接口（数据中心）。``EM2016`` 字段是东财行业三级路径。
+EM_ORGINFO_URL: str = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+#: 公司概况报表名，``EM2016`` 即东财行业分类。
+EM_ORGINFO_REPORT: str = "RPT_F10_BASIC_ORGINFO"
+#: 公司概况单页行数（实测上限 500），整表约 2.5 万行、50 页。
+EM_ORGINFO_PAGE_SIZE: int = 500
+#: 东财行业路径的分隔符，``金融-银行-股份制与城商行`` 取前两段作一级 / 二级。
+EM_INDUSTRY_SEPARATOR: str = "-"
+#: 东财数据中心接口超时（秒）。
+EM_HTTP_TIMEOUT_SECONDS: int = 30
+
+#: 行业快照列（``quant.data.schema.INDUSTRY`` 去掉 ``effective_from``，
+#: 该列由 cache 层按抓取日补）。
+_INDUSTRY_COLUMNS: pl.Schema = pl.Schema(
+    {
+        "instrument": pl.String,
+        "industry_l1": pl.String,
+        "industry_l2": pl.String,
+    }
+)
 
 #: 「派X元」形式的现金分红文本（前导「10」可能与其后的送转共用，故不强制匹配）。
 _PER10_CASH_RE = r"派\s*([0-9]+(?:\.[0-9]+)?)"
@@ -251,6 +274,36 @@ def _normalize_silent(code: str) -> str | None:
         return normalize_instrument(code)
     except ValueError:
         return None
+
+
+def _industry_frame(rows: list[dict[str, object]]) -> pl.DataFrame:
+    """把东财公司概况的原始行转成行业快照。
+
+    ``SECUCODE`` 归一化失败（新三板 ``.NQ``、B 股等）或 ``EM2016`` 为空的行直接丢弃；
+    ``EM2016`` 只有一段时二级回填成一级。
+    """
+    records: list[dict[str, object]] = []
+    for row in rows:
+        instrument = _normalize_silent(str(row.get("SECUCODE") or ""))
+        if instrument is None:
+            continue
+        parts = [
+            part
+            for part in str(row.get("EM2016") or "").split(EM_INDUSTRY_SEPARATOR)
+            if part
+        ]
+        if not parts:
+            continue
+        records.append(
+            {
+                "instrument": instrument,
+                "industry_l1": parts[0],
+                "industry_l2": parts[1] if len(parts) > 1 else parts[0],
+            }
+        )
+    if not records:
+        return pl.DataFrame(schema=_INDUSTRY_COLUMNS)
+    return pl.DataFrame(records, schema=_INDUSTRY_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +623,67 @@ class AkshareSource:
             .cast(INDEX_BARS)
             .sort(["index_code", "date"])
         )
+
+    # ------------------------------------------------------------------
+    # 行业分类（issue #65）
+    # ------------------------------------------------------------------
+
+    def industry_classification(self) -> pl.DataFrame:
+        """全市场东财行业归属（当前截面）。
+
+        返回 ``instrument / industry_l1 / industry_l2`` 三列，按 ``instrument`` 排序、
+        不含重复证券；``industry_l1`` 是东财行业一级，``industry_l2`` 是二级（东财
+        行业为三级分类，三级不落地）。空数据返回三列空表。
+
+        数据来自东财 F10 公司概况的 ``EM2016`` 字段（形如
+        ``金融-银行-股份制与城商行``）。选择该接口而非 ``stock_board_industry_*``：
+        一是它带东财行业一 / 二级（板块接口只有单层），二是抓取实测所在网络对
+        ``push2.eastmoney.com`` 系列主机 TCP 直连被 RST，而该数据中心主机可达。
+        分页全量拉取，页码翻完为止；单页失败由 :func:`_call` 重试，整体失败抛异常
+        由调用方（cache 层）记账。
+        """
+        frames: list[pl.DataFrame] = []
+        page = 1
+        total_pages = 1
+        while page <= total_pages:
+            payload = _call(self._fetch_industry_page, page)
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                break
+            total_pages = int(result.get("pages") or 0)
+            data = result.get("data")
+            if not isinstance(data, list) or not data:
+                break
+            frames.append(_industry_frame(data))
+            page += 1
+        if not frames:
+            return pl.DataFrame(schema=_INDUSTRY_COLUMNS)
+        return (
+            pl.concat(frames, how="vertical_relaxed")
+            .select(list(_INDUSTRY_COLUMNS.keys()))
+            .cast(_INDUSTRY_COLUMNS)
+            .unique(subset=["instrument"], keep="first")
+            .sort("instrument")
+        )
+
+    def _fetch_industry_page(self, page: int) -> dict[str, object]:
+        """取东财公司概况的第 ``page`` 页，返回解析后的 JSON 字典。"""
+        response = request_with_retry(
+            EM_ORGINFO_URL,
+            params={
+                "reportName": EM_ORGINFO_REPORT,
+                "columns": "SECUCODE,EM2016",
+                "pageSize": str(EM_ORGINFO_PAGE_SIZE),
+                "pageNumber": str(page),
+                "sortColumns": "SECURITY_CODE",
+                "sortTypes": "1",
+            },
+            timeout=EM_HTTP_TIMEOUT_SECONDS,
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("东财公司概况接口返回内容不是 JSON 对象")
+        return payload
 
     # ------------------------------------------------------------------
     # 交易日历

@@ -8,7 +8,9 @@
 - 重复抓取幂等（``unique`` 生效）；
 - 失败票记账与重试、空数据记账；
 - ``load_*`` 的过滤与 schema 校验；
-- ``update_daily`` 增量补缺口。
+- ``update_daily`` 增量补缺口；
+- 行业归属 ``update_industry`` / ``load_industry``（issue #65）：首抓、月度门槛、
+  新上市补抓、失败保留旧文件与 ``as_of`` 取值。
 """
 from __future__ import annotations
 
@@ -21,20 +23,25 @@ import polars as pl
 import pytest
 
 from quant.data.cache import (
+    INDUSTRY_FILE,
     INSTRUMENTS_FILE,
     fetch_full,
     load_bars,
     load_calendar,
     load_corporate_actions,
+    load_industry,
     load_instruments,
     update_daily,
+    update_industry,
 )
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    INDUSTRY,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
     check_daily_bars,
+    check_industry,
     check_schema,
 )
 from quant.data.source.base import DataSource
@@ -702,3 +709,164 @@ def test_fetch_full_keeps_source_adjfactor(tmp_path: Path) -> None:
     )
     # 全量首抓不锚定，因子原样落盘。
     assert load_bars(tmp_path)["adjfactor"].to_list() == [154.0, 155.0]
+
+
+# ---------------------------------------------------------------------------
+# 行业归属（issue #65）
+# ---------------------------------------------------------------------------
+
+
+class IndustrySource:
+    """只实现 ``industry_classification`` 的内存数据源。"""
+
+    def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
+        self._rows = rows or []
+        self.calls = 0
+
+    def industry_classification(self) -> pl.DataFrame:
+        self.calls += 1
+        schema = {
+            "instrument": pl.String,
+            "industry_l1": pl.String,
+            "industry_l2": pl.String,
+        }
+        if not self._rows:
+            return pl.DataFrame(schema=schema)
+        return pl.DataFrame(self._rows, schema=schema).sort("instrument")
+
+
+def _industry_row(
+    instrument: str, l1: str = "信息技术", l2: str = "半导体"
+) -> dict[str, object]:
+    return {"instrument": instrument, "industry_l1": l1, "industry_l2": l2}
+
+
+def _seed_instruments(data_dir: Path, *instruments: str) -> None:
+    _info(*instruments).write_parquet(data_dir / INSTRUMENTS_FILE)
+
+
+def test_update_industry_first_run_writes_snapshot(tmp_path: Path) -> None:
+    _seed_instruments(tmp_path, "600000.SH", "000001.SZ")
+    source = IndustrySource([_industry_row("600000.SH"), _industry_row("000001.SZ", l1="金融", l2="银行")])
+
+    report = update_industry(source, tmp_path, today=date(2026, 9, 29))
+
+    assert report.refreshed
+    assert not report.failures
+    assert report.effective_from == date(2026, 9, 29)
+    assert report.active == 2
+    assert report.missing == 0
+    assert report.coverage == 1.0
+    assert source.calls == 1
+
+    loaded = load_industry(tmp_path)
+    check_industry(loaded)
+    assert loaded["instrument"].to_list() == ["000001.SZ", "600000.SH"]
+    assert loaded["industry_l2"].to_list() == ["银行", "半导体"]
+    assert loaded["effective_from"].to_list() == [date(2026, 9, 29)] * 2
+
+
+def test_update_industry_drops_untracked_instruments(tmp_path: Path) -> None:
+    _seed_instruments(tmp_path, "600000.SH")
+    source = IndustrySource([_industry_row("600000.SH"), _industry_row("999999.SZ")])
+
+    update_industry(source, tmp_path, today=date(2026, 9, 29))
+
+    assert load_industry(tmp_path)["instrument"].to_list() == ["600000.SH"]
+
+
+def test_update_industry_same_day_rerun_is_idempotent(tmp_path: Path) -> None:
+    _seed_instruments(tmp_path, "600000.SH")
+    source = IndustrySource([_industry_row("600000.SH")])
+    update_industry(source, tmp_path, today=date(2026, 9, 29))
+    snapshot = pl.read_parquet(tmp_path / INDUSTRY_FILE)
+
+    # 默认间隔内的同日重跑直接跳过；强制重抓时结果与首次逐字节一致。
+    skipped = update_industry(source, tmp_path, today=date(2026, 9, 29))
+    assert skipped.skipped
+
+    second = update_industry(source, tmp_path, today=date(2026, 9, 29), force=True)
+
+    assert second.refreshed
+    assert second.rows == 1
+    assert pl.read_parquet(tmp_path / INDUSTRY_FILE).equals(snapshot)
+
+
+def test_update_industry_skips_before_refresh_interval(tmp_path: Path) -> None:
+    _seed_instruments(tmp_path, "600000.SH")
+    source = IndustrySource([_industry_row("600000.SH")])
+    update_industry(source, tmp_path, today=date(2026, 9, 1))
+
+    later = update_industry(source, tmp_path, today=date(2026, 9, 20))
+
+    assert later.skipped
+    assert not later.refreshed
+    assert source.calls == 1
+    # 距上次快照 >= 28 天，重新整表抓取。
+    again = update_industry(source, tmp_path, today=date(2026, 9, 29))
+    assert again.refreshed
+    assert source.calls == 2
+
+
+def test_update_industry_fetches_new_listing_within_interval(tmp_path: Path) -> None:
+    _seed_instruments(tmp_path, "600000.SH")
+    first_source = IndustrySource([_industry_row("600000.SH")])
+    update_industry(first_source, tmp_path, today=date(2026, 9, 1))
+
+    # 新股上市：表内没有归属，即使未到刷新间隔也补抓。
+    _seed_instruments(tmp_path, "600000.SH", "301999.SZ")
+    second_source = IndustrySource(
+        [_industry_row("600000.SH"), _industry_row("301999.SZ")]
+    )
+
+    report = update_industry(second_source, tmp_path, today=date(2026, 9, 2))
+
+    assert report.refreshed
+    assert second_source.calls == 1
+    assert report.missing == 0
+    loaded = load_industry(tmp_path)
+    assert loaded.height == 2
+
+
+def test_update_industry_failure_keeps_existing_file(tmp_path: Path) -> None:
+    _seed_instruments(tmp_path, "600000.SH")
+    update_industry(IndustrySource([_industry_row("600000.SH")]), tmp_path, today=date(2026, 9, 1))
+    snapshot = pl.read_parquet(tmp_path / INDUSTRY_FILE)
+
+    class Boom(IndustrySource):
+        def industry_classification(self) -> pl.DataFrame:
+            raise RuntimeError("东财不可用")
+
+    report = update_industry(Boom(), tmp_path, today=date(2026, 9, 29))
+
+    assert not report.refreshed
+    assert "__snapshot__" in report.failures
+    assert pl.read_parquet(tmp_path / INDUSTRY_FILE).equals(snapshot)
+
+
+def test_load_industry_missing_file_returns_empty(tmp_path: Path) -> None:
+    out = load_industry(tmp_path)
+    assert out.height == 0
+    check_industry(out)
+
+
+def test_load_industry_as_of_picks_latest_snapshot(tmp_path: Path) -> None:
+    _seed_instruments(tmp_path, "600000.SH")
+    update_industry(
+        IndustrySource([_industry_row("600000.SH", l1="信息技术", l2="半导体")]),
+        tmp_path,
+        today=date(2026, 1, 5),
+    )
+    update_industry(
+        IndustrySource([_industry_row("600000.SH", l1="金融", l2="银行")]),
+        tmp_path,
+        today=date(2026, 6, 5),
+    )
+
+    old = load_industry(tmp_path, as_of=date(2026, 3, 1))
+    assert old["industry_l2"].to_list() == ["半导体"]
+    assert old["effective_from"].to_list() == [date(2026, 1, 5)]
+
+    newest = load_industry(tmp_path)
+    assert newest["industry_l2"].to_list() == ["银行"]
+    assert newest["effective_from"].to_list() == [date(2026, 6, 5)]
