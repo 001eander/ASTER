@@ -23,19 +23,32 @@
 - 每只票抓完立即记账，日线数据按 ``BARS_FLUSH_EVERY`` 只批量合并写盘，
   避免逐票重写年份文件的写放大。落盘顺序为先 parquet 后账本：崩溃后账本
   落后于 parquet，重跑补抓时 ``unique(keep="last")`` 保证幂等。
-- 断点状态以账本为准：``last_date`` 是已确认落盘数据在该票上的最大日期，它不是
-  ``end`` 时只补 ``[last_date + 1, end]``，从头重抓的只有账本里无记录的票。
+- 断点状态以账本为准：``last_date`` 是已确认落盘数据在该票上的最大日期。它对
+  ``status == "ok"`` 的票是增量抓取的锚点日，抓取区间为 ``[last_date, end]``
+  （含该日，用于重定复权基期）；失败或无 ``last_date`` 的票仍从
+  ``no_last_date_start`` 起全抓。
 - 公司行为接口逐票抓取，本模块按 ``CA_BATCH_SIZE`` 分批调用数据源以摊薄账本
   写入，批次内成功整批记账；数据源对单票失败的 log+skip 无法区分「无分红」与
   「抓取失败」，故两者统一记为 ``empty``（均为终态，续传时跳过）。
 - ``DataSource`` 对单票失败是 log+skip，缓存层自己按票记账：调用抛出异常的票
   记为 ``failed``，返回空表的票记为 ``empty``。
+- 增量复权因子重定基（issue #59）：CSMAR 建库把历史 bars 落成 CSMAR 基期因子，
+  其后由 akshare 每日增量接续。两源原始行情一致、事件乘数一致（新浪源 197 个事件
+  相对差中位 3.2e-5、最大 6.3e-4），但因子绝对水平每股有恒定比例差（历史事件乘数
+  口径差几十年复利，000001 CSMAR/akshare≈1.248，600519≈1.0），直接落盘会让接缝日
+  每股 ``adjfactor`` 跳变一个固定倍率，破坏跨接缝的后复权收益。因此增量时多抓一个
+  锚点日 ``last_date``，用 ``scale = 缓存last_date因子 / akshare同日期因子``
+  把增量段整体重定基，误差只剩事件乘数口径差（~3e-5）。锚点日行不落盘，避免覆盖
+  缓存基期因子。``scale`` 落在 ``[0.2, 5.0]`` 之外或锚点缺失时告警并不缩放。
+- 锚定机制的幂等性：同日重跑因 ``last_date >= end`` 短路跳过；跨日重跑时锚点取
+  缓存最新行，``scale`` 稳定，重复段由 ``unique(keep="last")`` 覆盖为同值。
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
 import logging
+import math
 import os
 import time
 from collections.abc import Callable, Iterator
@@ -80,6 +93,10 @@ FAILED_RETRY_LOOKBACK_DAYS: int = 30
 #: 日线合并写盘的批大小：累积若干只票再一次合并进年份文件，避免逐票整文件
 #: 重写带来的写放大。崩溃后账本落后于 parquet，重抓时 unique 去重保证幂等。
 BARS_FLUSH_EVERY: int = 100
+
+#: 增量复权因子重定基的合理缩放区间；超出视为异常，告警并不缩放。
+REBASE_SCALE_MIN: float = 0.2
+REBASE_SCALE_MAX: float = 5.0
 
 #: 账本里 bars 条目的状态取值。
 STATUS_OK: str = "ok"
@@ -278,25 +295,131 @@ def _bar_plan(
     start: date,
     end: date,
     no_last_date_start: date | None,
+    include_anchor: bool = False,
 ) -> tuple[date, date] | None:
     """返回该票需要补抓的闭区间，``None`` 表示可跳过。
 
     - 账本无记录：从 ``no_last_date_start``（缺省为 ``start``）全抓。
-    - 有 ``last_date``：从 ``last_date + 1`` 抓到 ``end``。
-    - status 为 ``ok`` 且 ``last_date >= end``：跳过。
+    - ``status == "ok"``、有 ``last_date`` 且 ``include_anchor``：从
+      ``last_date`` 抓到 ``end``，多抓的锚点日用于增量复权因子重定基（不落盘）。
+    - 其余有 ``last_date`` 的情况：从 ``last_date + 1`` 抓到 ``end``。
+    - ``last_date >= end``：跳过。
     """
     if entry is None:
         fetch_start = no_last_date_start or start
     else:
         last = _parse_date(entry.get("last_date"))
-        if entry.get("status") == STATUS_OK and last is not None and last >= end:
+        is_ok = entry.get("status") == STATUS_OK
+        if is_ok and last is not None and last >= end:
             return None
-        fetch_start = last + timedelta(days=1) if last is not None else (
-            no_last_date_start or start
-        )
+        if last is None:
+            fetch_start = no_last_date_start or start
+        elif is_ok and include_anchor:
+            fetch_start = last  # 含锚点日
+        else:
+            fetch_start = last + timedelta(days=1)
     if fetch_start > end:
         return None
     return fetch_start, end
+
+
+def _is_positive_finite(value: float | None) -> bool:
+    return value is not None and math.isfinite(value) and value > 0
+
+
+def _load_anchors(
+    data_dir: Path, entries: dict[str, dict[str, object]]
+) -> dict[str, tuple[date, float]]:
+    """构建增量重定基锚点表：``instrument -> (last_date, 缓存adjfactor)``。
+
+    整库只读一遍：先收集 ``status == "ok"`` 且 ``last_date`` 非空的
+    ``(instrument, last_date)``，按 ``last_date`` 年份分组，只读涉及年份的 bars
+    文件（``last_date`` 通常落在最近一两个年份文件）。没有候选锚点时直接返回空表，
+    不读任何文件。
+    """
+    by_year: dict[int, list[tuple[str, date]]] = {}
+    for instrument, entry in entries.items():
+        if entry.get("status") != STATUS_OK:
+            continue
+        last = _parse_date(entry.get("last_date"))
+        if last is None:
+            continue
+        by_year.setdefault(last.year, []).append((instrument, last))
+    if not by_year:
+        return {}
+
+    anchors: dict[str, tuple[date, float]] = {}
+    for year, pairs in by_year.items():
+        path = _bars_path(data_dir, year)
+        if not path.exists():
+            continue
+        wanted = sorted({instrument for instrument, _ in pairs})
+        frame = pl.read_parquet(
+            path, columns=["instrument", "date", "adjfactor"]
+        ).filter(pl.col("instrument").is_in(wanted))
+        lookup = {
+            (row["instrument"], row["date"]): row["adjfactor"]
+            for row in frame.iter_rows(named=True)
+        }
+        for instrument, last in pairs:
+            factor = lookup.get((instrument, last))
+            if factor is not None:
+                anchors[instrument] = (last, float(factor))
+    return anchors
+
+
+def _rebase_on_anchor(
+    instrument: str, frame: pl.DataFrame, anchor: tuple[date, float]
+) -> pl.DataFrame:
+    """把增量段 ``adjfactor`` 重定基到缓存基期，并去掉锚点日行。
+
+    ``scale = 缓存锚点因子 / 数据源锚点因子``；锚点行缺失、因子非正有限值或
+    ``scale`` 超出 ``[REBASE_SCALE_MIN, REBASE_SCALE_MAX]`` 时告警并不缩放。
+    无论是否缩放，锚点日及其之前的行都不落盘，避免覆盖缓存基期因子。
+    """
+    last_date, cached_factor = anchor
+    anchor_rows = frame.filter(pl.col("date") == last_date)
+    scale = 1.0
+    if anchor_rows.height == 0:
+        logger.warning(
+            "增量重定基缺锚点行：%s 在 %s 无数据（返回日期范围 %s ~ %s），原样落盘",
+            instrument,
+            last_date,
+            frame["date"].min(),
+            frame["date"].max(),
+        )
+    else:
+        source_factor = anchor_rows["adjfactor"][0]
+        if _is_positive_finite(source_factor) and _is_positive_finite(cached_factor):
+            candidate = cached_factor / source_factor
+            if REBASE_SCALE_MIN <= candidate <= REBASE_SCALE_MAX:
+                scale = candidate
+            else:
+                logger.warning(
+                    "增量重定基 scale=%.4g 超出 [%.2g, %.2g]：%s 锚点 %s "
+                    "数据源因子=%s 缓存因子=%s，不缩放",
+                    candidate,
+                    REBASE_SCALE_MIN,
+                    REBASE_SCALE_MAX,
+                    instrument,
+                    last_date,
+                    source_factor,
+                    cached_factor,
+                )
+        else:
+            logger.warning(
+                "增量重定基因子非正有限值：%s 锚点 %s 数据源因子=%s 缓存因子=%s，不缩放",
+                instrument,
+                last_date,
+                source_factor,
+                cached_factor,
+            )
+    frame = frame.filter(pl.col("date") > last_date)
+    if scale != 1.0 and frame.height:
+        frame = frame.with_columns(
+            (pl.col("adjfactor") * scale).alias("adjfactor")
+        )
+    return frame
 
 
 def _emit(progress: ProgressCallback | None, done: int, total: int, instrument: str) -> None:
@@ -319,6 +442,7 @@ def _fetch_bars(
     report: FetchReport,
     progress: ProgressCallback | None,
     no_last_date_start: date | None = None,
+    anchors: dict[str, tuple[date, float]] | None = None,
 ) -> None:
     entries = _bar_entries(manifest)
     total = len(instruments)
@@ -336,7 +460,14 @@ def _fetch_bars(
 
     for done, instrument in enumerate(instruments, start=1):
         try:
-            plan = _bar_plan(entries.get(instrument), start, end, no_last_date_start)
+            anchor = anchors.get(instrument) if anchors else None
+            plan = _bar_plan(
+                entries.get(instrument),
+                start,
+                end,
+                no_last_date_start,
+                include_anchor=anchor is not None,
+            )
             if plan is None:
                 report.skipped += 1
                 _emit(progress, done, total, instrument)
@@ -359,6 +490,8 @@ def _fetch_bars(
                 logger.warning("抓取 %s 日线失败：%s", instrument, exc)
                 pending.append(instrument)
             else:
+                if anchor is not None:
+                    frame = _rebase_on_anchor(instrument, frame, anchor)
                 if frame.height:
                     buffer.append(frame)
                     new_rows = frame.select(["instrument", "date"]).unique().height
@@ -366,6 +499,16 @@ def _fetch_bars(
                     entries[instrument] = {
                         "last_date": _dump_date(frame["date"].max()),
                         "rows": int(previous.get("rows") or 0) + new_rows,
+                        "status": STATUS_OK,
+                        "error": None,
+                    }
+                    report.ok += 1
+                elif anchor is not None:
+                    # 只返回锚点行或尚无新数据：视为已是最新，保持原 last_date。
+                    previous = entries.get(instrument, {})
+                    entries[instrument] = {
+                        "last_date": previous.get("last_date"),
+                        "rows": int(previous.get("rows") or 0),
                         "status": STATUS_OK,
                         "error": None,
                     }
@@ -484,6 +627,7 @@ def fetch_full(
     _atomic_write_parquet(data_dir / CALENDAR_FILE, calendar)
 
     report = FetchReport()
+    # 全量首抓同一来源内部基期自洽，无需锚定（anchors 默认 None）。
     _fetch_bars(source, data_dir, manifest, instruments, start, end, report, progress)
     if ca:
         _fetch_corporate_actions(
@@ -511,6 +655,9 @@ def update_daily(
 
     ``end`` 默认今天。``calendar.parquet`` 与 ``instruments.parquet`` 每次全量
     刷新；公司行为不在本期增量范围内（由 ``fetch_full`` 负责，issue #4 再调度）。
+
+    增量抓取会多带一个锚点日（缓存 ``last_date``）并对新行 ``adjfactor`` 重定基到
+    缓存基期，跨数据源接缝不跳变，详见模块 docstring 的「增量复权因子重定基」。
     """
     started = time.monotonic()
     data_dir = Path(data_dir)
@@ -532,6 +679,8 @@ def update_daily(
         for instrument, entry in entries.items()
         if entry.get("status") in (STATUS_OK, STATUS_FAILED)
     ]
+    # 增量段复权因子重定基到缓存基期（issue #59），避免跨源接缝处每股因子跳变。
+    anchors = _load_anchors(data_dir, entries)
 
     report = FetchReport()
     _fetch_bars(
@@ -544,6 +693,7 @@ def update_daily(
         report,
         progress,
         no_last_date_start=end - timedelta(days=FAILED_RETRY_LOOKBACK_DAYS),
+        anchors=anchors,
     )
     _save_manifest(data_dir, manifest)
     report.elapsed_seconds = time.monotonic() - started

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -44,7 +45,9 @@ from quant.data.source.base import DataSource
 # ---------------------------------------------------------------------------
 
 
-def _bar(day: date, instrument: str, close: float = 10.0) -> dict[str, object]:
+def _bar(
+    day: date, instrument: str, close: float = 10.0, adjfactor: float = 1.0
+) -> dict[str, object]:
     return {
         "date": day,
         "instrument": instrument,
@@ -55,7 +58,7 @@ def _bar(day: date, instrument: str, close: float = 10.0) -> dict[str, object]:
         "vwap": close,
         "volume": 1000.0,
         "amount": close * 1000.0,
-        "adjfactor": 1.0,
+        "adjfactor": adjfactor,
         "limit_up": None,
         "limit_down": None,
     }
@@ -511,7 +514,8 @@ def test_update_daily_appends_gap(tmp_path: Path) -> None:
     source = FakeSource(bars, info=info)
     report = update_daily(source, tmp_path, end=date(2026, 1, 5))
 
-    assert source.bar_calls == [("600000.SH", date(2026, 1, 3), date(2026, 1, 5))]
+    # 增量多带锚点日 1/2 用于重定基（不落盘）。
+    assert source.bar_calls == [("600000.SH", date(2026, 1, 2), date(2026, 1, 5))]
     assert report.ok == 1
     loaded = load_bars(tmp_path)
     check_daily_bars(loaded)
@@ -534,3 +538,167 @@ def test_update_daily_skips_up_to_date(tmp_path: Path) -> None:
 
     assert report.skipped == 1
     assert source.bar_calls == []
+
+
+# ---------------------------------------------------------------------------
+# 增量复权因子重定基（issue #59）
+# ---------------------------------------------------------------------------
+
+
+def _load_adjfactors(data_dir: Path, instrument: str) -> dict[date, float]:
+    frame = load_bars(data_dir, instruments=[instrument])
+    return {row["date"]: row["adjfactor"] for row in frame.iter_rows(named=True)}
+
+
+def test_update_daily_rebases_adjfactor_on_anchor(tmp_path: Path) -> None:
+    info = _info("600000.SH")
+    cached = {"600000.SH": [_bar(date(2026, 9, 28), "600000.SH", adjfactor=192.0)]}
+    fetch_full(
+        FakeSource(cached, info=info),
+        tmp_path,
+        start=date(2026, 1, 1),
+        end=date(2026, 9, 28),
+    )
+    assert _load_adjfactors(tmp_path, "600000.SH") == {date(2026, 9, 28): 192.0}
+
+    incoming = {
+        "600000.SH": [
+            _bar(date(2026, 9, 28), "600000.SH", adjfactor=154.0),  # 锚点行
+            _bar(date(2026, 9, 29), "600000.SH", adjfactor=155.0),
+        ]
+    }
+    source = FakeSource(incoming, info=info)
+    report = update_daily(source, tmp_path, end=date(2026, 9, 29))
+
+    assert report.ok == 1
+    assert source.bar_calls == [("600000.SH", date(2026, 9, 28), date(2026, 9, 29))]
+    factors = _load_adjfactors(tmp_path, "600000.SH")
+    # 锚点日保持缓存基期因子不被覆盖；新行整体重定基。
+    assert factors[date(2026, 9, 28)] == 192.0
+    assert factors[date(2026, 9, 29)] == pytest.approx(155.0 * 192.0 / 154.0)
+    assert len(factors) == 2
+
+
+def test_update_daily_anchor_missing_row_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="quant.data.cache")
+    info = _info("600000.SH")
+    fetch_full(
+        FakeSource(
+            {"600000.SH": [_bar(date(2026, 9, 28), "600000.SH", adjfactor=192.0)]},
+            info=info,
+        ),
+        tmp_path,
+        start=date(2026, 1, 1),
+        end=date(2026, 9, 28),
+    )
+
+    incoming = {"600000.SH": [_bar(date(2026, 9, 29), "600000.SH", adjfactor=155.0)]}
+    report = update_daily(FakeSource(incoming, info=info), tmp_path, end=date(2026, 9, 29))
+
+    assert report.ok == 1
+    factors = _load_adjfactors(tmp_path, "600000.SH")
+    # 无锚点行：原样落盘，缓存锚点日不变。
+    assert factors[date(2026, 9, 28)] == 192.0
+    assert factors[date(2026, 9, 29)] == 155.0
+    assert any("缺锚点行" in record.message for record in caplog.records)
+
+
+def test_update_daily_only_anchor_row_marks_ok(tmp_path: Path) -> None:
+    info = _info("600000.SH")
+    fetch_full(
+        FakeSource(
+            {"600000.SH": [_bar(date(2026, 9, 28), "600000.SH", adjfactor=192.0)]},
+            info=info,
+        ),
+        tmp_path,
+        start=date(2026, 1, 1),
+        end=date(2026, 9, 28),
+    )
+
+    # 数据源尚无新数据，只返回了锚点行。
+    incoming = {"600000.SH": [_bar(date(2026, 9, 28), "600000.SH", adjfactor=154.0)]}
+    report = update_daily(FakeSource(incoming, info=info), tmp_path, end=date(2026, 9, 29))
+
+    assert report.ok == 1
+    assert report.empty == 0
+    assert _load_adjfactors(tmp_path, "600000.SH") == {date(2026, 9, 28): 192.0}
+    manifest = _manifest(tmp_path)
+    assert manifest["bars"]["600000.SH"]["status"] == "ok"
+    assert manifest["bars"]["600000.SH"]["last_date"] == "2026-09-28"
+
+
+def test_update_daily_anchor_scale_out_of_range_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="quant.data.cache")
+    info = _info("600000.SH")
+    fetch_full(
+        FakeSource(
+            {"600000.SH": [_bar(date(2026, 9, 28), "600000.SH", adjfactor=192.0)]},
+            info=info,
+        ),
+        tmp_path,
+        start=date(2026, 1, 1),
+        end=date(2026, 9, 28),
+    )
+
+    incoming = {
+        "600000.SH": [
+            _bar(date(2026, 9, 28), "600000.SH", adjfactor=19_200.0),  # scale=0.01
+            _bar(date(2026, 9, 29), "600000.SH", adjfactor=155.0),
+        ]
+    }
+    report = update_daily(FakeSource(incoming, info=info), tmp_path, end=date(2026, 9, 29))
+
+    assert report.ok == 1
+    factors = _load_adjfactors(tmp_path, "600000.SH")
+    # scale 越界：不缩放，新行原样落盘。
+    assert factors[date(2026, 9, 29)] == 155.0
+    assert any("scale" in record.message for record in caplog.records)
+
+
+def test_update_daily_anchor_idempotent(tmp_path: Path) -> None:
+    info = _info("600000.SH")
+    fetch_full(
+        FakeSource(
+            {"600000.SH": [_bar(date(2026, 9, 28), "600000.SH", adjfactor=192.0)]},
+            info=info,
+        ),
+        tmp_path,
+        start=date(2026, 1, 1),
+        end=date(2026, 9, 28),
+    )
+    incoming = {
+        "600000.SH": [
+            _bar(date(2026, 9, 28), "600000.SH", adjfactor=154.0),
+            _bar(date(2026, 9, 29), "600000.SH", adjfactor=155.0),
+        ]
+    }
+    update_daily(FakeSource(incoming, info=info), tmp_path, end=date(2026, 9, 29))
+    snapshot = load_bars(tmp_path)
+
+    second_source = FakeSource(incoming, info=info)
+    second = update_daily(second_source, tmp_path, end=date(2026, 9, 29))
+
+    assert second.skipped == 1
+    assert second_source.bar_calls == []
+    assert load_bars(tmp_path).equals(snapshot)
+
+
+def test_fetch_full_keeps_source_adjfactor(tmp_path: Path) -> None:
+    bars = {
+        "600000.SH": [
+            _bar(date(2026, 9, 28), "600000.SH", adjfactor=154.0),
+            _bar(date(2026, 9, 29), "600000.SH", adjfactor=155.0),
+        ]
+    }
+    fetch_full(
+        FakeSource(bars, info=_info("600000.SH")),
+        tmp_path,
+        start=date(2026, 1, 1),
+        end=date(2026, 9, 29),
+    )
+    # 全量首抓不锚定，因子原样落盘。
+    assert load_bars(tmp_path)["adjfactor"].to_list() == [154.0, 155.0]
