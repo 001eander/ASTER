@@ -93,10 +93,17 @@ async function runCommand(args: Map<string, string | boolean>): Promise<void> {
     { unlimited: noLimits },
   );
   const image = process.env.HYRA_PI_IMAGE ?? "debian:bookworm-slim";
+  // 额外挂载（如数据只读挂载）：分号分隔多条，单条同 docker -v 语法。
+  // Windows 宿主路径自带盘符冒号，故分隔符用分号。
+  const extraMounts = (process.env.HYRA_PI_EXTRA_MOUNTS ?? "")
+    .split(";")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
   const sandbox = createDockerSandbox({
     taskDir: task.dir,
     image,
     timeoutMs: sandboxMs,
+    extraMounts,
   });
   const contextModel =
     typeof args.get("context-model") === "string"

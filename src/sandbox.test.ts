@@ -41,6 +41,41 @@ describe("docker sandbox", () => {
     expect(await readFile(path.join(solutionDir, "eval.stderr"), "utf8")).toBe("");
   });
 
+  it("appends extra mounts as -v args", async () => {
+    const root = await tmp();
+    const taskDir = path.join(root, "task");
+    const solutionDir = path.join(root, "solution");
+    await mkdir(taskDir, { recursive: true });
+    await mkdir(solutionDir, { recursive: true });
+    await writeFile(path.join(taskDir, "eval.sh"), "#!/bin/sh\n", "utf8");
+
+    let seenArgs: string[] = [];
+    const docker: DockerRun = async (args, opts) => {
+      seenArgs = args;
+      await writeFile(
+        path.join(opts.workDir, "score.json"),
+        JSON.stringify({ score: 1 }),
+      );
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    const sandbox = createDockerSandbox({
+      taskDir,
+      image: "hyra-pi-eval:test",
+      timeoutMs: 5000,
+      extraMounts: [`${root}${path.sep}data:/data:ro`],
+      docker,
+    });
+    await sandbox.evaluate(solutionDir);
+
+    const mounts: string[] = [];
+    for (let i = 0; i < seenArgs.length; i += 1) {
+      if (seenArgs[i] === "-v") mounts.push(seenArgs[i + 1]);
+    }
+    expect(mounts).toHaveLength(2);
+    expect(mounts[1]).toBe(`${root}${path.sep}data:/data:ro`);
+  });
+
   it("streams stdout and stderr into separate files", async () => {
     const root = await tmp();
     const taskDir = path.join(root, "task");
