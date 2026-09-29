@@ -1,0 +1,376 @@
+"""``quant.eval.factor`` 的单元测试：因子级评估管线与 CLI。
+
+全部使用合成数据，不触网、不读 ``data/`` 真实缓存。合成面板 60 只证券 × 300 个交易日，
+信号 ``sig`` 与次日收益挂钩，由收益链反推开盘价链，使得 ``value = vwap`` 的因果因子
+拿到稳定正 RankIC。
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import math
+import random
+from pathlib import Path
+
+import polars as pl
+import pytest
+
+from quant.data.schema import DAILY_BARS
+from quant.eval import factor as factor_module
+from quant.eval.factor import (
+    ICIR_MIN,
+    MONO_MIN,
+    RANK_IC_MIN,
+    FactorEvaluation,
+    evaluate_factor,
+    main,
+)
+from quant.factor_api.truncation import TruncationResult
+
+# ---------------------------------------------------------------------------
+# 合成数据
+# ---------------------------------------------------------------------------
+
+N_INSTRUMENTS: int = 60
+N_DAYS: int = 300
+START: dt.date = dt.date(2021, 9, 29)
+#: 次日收益对信号的暴露，0.4 保证 RankIC 明显为正且门控可通过。
+SIGNAL_LOADING: float = 0.4
+NOISE_LOADING: float = math.sqrt(1.0 - SIGNAL_LOADING**2)
+#: 收益幅度，压到 1% 量级以保证价格链恒正。
+RETURN_SCALE: float = 0.01
+#: vwap 相对基价的信号幅度，仅影响量纲，不影响 RankIC。
+SIGNAL_SCALE: float = 0.3
+VWAP_BASE: float = 10.0
+
+#: 因子源码：当日 vwap，与合成标签同向的因果因子。
+GOOD_FACTOR_SRC: str = '''
+"""测试因子：当日 vwap，与合成标签同向。"""
+from __future__ import annotations
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    return data.select("date", "instrument", pl.col("vwap").alias("value"))
+'''
+
+#: 方向做反的因子：取 vwap 的相反数。
+REVERSED_FACTOR_SRC: str = '''
+"""测试因子：-vwap，方向与标签相反。"""
+from __future__ import annotations
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    return data.select("date", "instrument", (-pl.col("vwap")).alias("value"))
+'''
+
+#: 前视因子：用下一日 close，截断重算应检出。
+LOOKAHEAD_FACTOR_SRC: str = '''
+"""测试因子：下一日 close，故意引入前视。"""
+from __future__ import annotations
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    ordered = data.sort(["instrument", "date"])
+    return ordered.with_columns(
+        pl.col("close").shift(-1).over("instrument").alias("value")
+    ).select("date", "instrument", "value")
+'''
+
+#: 输出缺列因子：只给 date / instrument，缺 value。
+MISSING_COLUMN_FACTOR_SRC: str = '''
+"""测试因子：输出缺 value 列。"""
+from __future__ import annotations
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    return data.select("date", "instrument")
+'''
+
+#: 抛异常因子。
+RAISING_FACTOR_SRC: str = '''
+"""测试因子：计算直接抛异常。"""
+from __future__ import annotations
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    raise RuntimeError("boom")
+'''
+
+#: 声明 WARMUP 的因子，用于验证预热期透传。
+WARMUP_FACTOR_SRC: str = '''
+"""测试因子：声明 WARMUP=10。"""
+from __future__ import annotations
+
+import polars as pl
+
+WARMUP: int = 10
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    return data.select("date", "instrument", pl.col("vwap").alias("value"))
+'''
+
+
+def _instrument(index: int) -> str:
+    """生成形如 ``600000.SH`` 的证券代码。"""
+    return f"{600000 + index:06d}.SH"
+
+
+def _make_bars(seed: int = 20260929) -> pl.DataFrame:
+    """合成 60 只 × 300 天的 ``DAILY_BARS``。
+
+    每只证券先生成信号 ``sig`` 与噪声，按 ``ret(t+1) = 0.4 sig(t) + sqrt(1-0.16) noise(t)``
+    构造 ``t`` 到 ``t+1`` 的收益，再由收益链累乘出开盘价链；``vwap = VWAP_BASE + 0.3 sig``
+    暴露信号，使因子 ``value = vwap`` 的次日 IC 稳定为正。
+    """
+    rng = random.Random(seed)
+    dates = [START + dt.timedelta(days=step) for step in range(N_DAYS)]
+    rows: list[dict[str, object]] = []
+
+    for index in range(N_INSTRUMENTS):
+        instrument = _instrument(index)
+        signals = [rng.gauss(0.0, 1.0) for _ in range(N_DAYS)]
+        # returns[d] 为 d-1 到 d 的日收益，令 label(t)=returns[t+2] 依赖 signals[t]。
+        returns = [0.0] * N_DAYS
+        for day in range(2, N_DAYS):
+            noise = rng.gauss(0.0, 1.0)
+            returns[day] = RETURN_SCALE * (
+                SIGNAL_LOADING * signals[day - 2] + NOISE_LOADING * noise
+            )
+        opens = [0.0] * N_DAYS
+        opens[0] = VWAP_BASE + 0.01 * index
+        for day in range(1, N_DAYS):
+            opens[day] = opens[day - 1] * (1.0 + returns[day])
+
+        for day in range(N_DAYS):
+            open_price = opens[day]
+            close = open_price * 1.001
+            vwap = VWAP_BASE + SIGNAL_SCALE * signals[day]
+            volume = 1_000_000.0 + 1000.0 * (day % 7)
+            rows.append(
+                {
+                    "date": dates[day],
+                    "instrument": instrument,
+                    "open": open_price,
+                    "high": max(open_price, close) * 1.01,
+                    "low": min(open_price, close) * 0.99,
+                    "close": close,
+                    "vwap": vwap,
+                    "volume": volume,
+                    "amount": vwap * volume,
+                    "adjfactor": 1.0,
+                    "limit_up": None,
+                    "limit_down": None,
+                }
+            )
+    return pl.DataFrame(rows, schema=DAILY_BARS).sort(["instrument", "date"])
+
+
+def _write(tmp_path: Path, source: str, name: str = "factor") -> Path:
+    """把因子源码写到 ``tmp_path`` 并返回路径。"""
+    path = tmp_path / f"{name}.py"
+    path.write_text(source, encoding="utf-8")
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 管线各阶段
+# ---------------------------------------------------------------------------
+
+
+class TestGatePass:
+    def test_good_factor_passes_gate(self, tmp_path: Path) -> None:
+        data = _make_bars()
+        result = evaluate_factor(_write(tmp_path, GOOD_FACTOR_SRC), data)
+
+        assert isinstance(result, FactorEvaluation)
+        assert result.ok is True
+        assert result.stage == "done"
+        assert result.error is None
+        assert result.gate_passed is True
+        assert result.metrics["rank_ic_mean"] > RANK_IC_MIN
+        assert result.metrics["icir"] > ICIR_MIN
+        assert result.metrics["mono"] > MONO_MIN
+        assert result.metrics["n_days"] > 0
+        assert result.metrics["turnover_mean"] is not None
+        assert result.truncation is not None and result.truncation["ok"] is True
+        assert result.complexity is not None and result.complexity["ok"] is True
+
+    def test_reversed_factor_fails_gate_but_keeps_negative_score(
+        self, tmp_path: Path
+    ) -> None:
+        data = _make_bars()
+        result = evaluate_factor(_write(tmp_path, REVERSED_FACTOR_SRC), data)
+
+        assert result.ok is True
+        assert result.stage == "done"
+        assert result.gate_passed is False
+        assert result.metrics["rank_ic_mean"] < 0.0
+
+
+class TestHardFailures:
+    def test_lookahead_factor_flags_truncation(self, tmp_path: Path) -> None:
+        data = _make_bars()
+        result = evaluate_factor(_write(tmp_path, LOOKAHEAD_FACTOR_SRC), data)
+
+        assert result.ok is False
+        assert result.stage == "truncation"
+        assert result.error is not None and "前视" in result.error
+        assert result.truncation is not None
+        assert result.truncation["ok"] is False
+        assert result.metrics == {}
+
+    def test_missing_output_column_is_schema(self, tmp_path: Path) -> None:
+        data = _make_bars()
+        result = evaluate_factor(_write(tmp_path, MISSING_COLUMN_FACTOR_SRC), data)
+
+        assert result.ok is False
+        assert result.stage == "schema"
+        assert result.error is not None and "输出" in result.error
+
+    def test_raising_factor_is_compute(self, tmp_path: Path) -> None:
+        data = _make_bars()
+        result = evaluate_factor(_write(tmp_path, RAISING_FACTOR_SRC), data)
+
+        assert result.ok is False
+        assert result.stage == "compute"
+        assert result.error is not None and "boom" in result.error
+
+    def test_missing_factor_file_is_load(self, tmp_path: Path) -> None:
+        data = _make_bars()
+        result = evaluate_factor(tmp_path / "nope.py", data)
+
+        assert result.ok is False
+        assert result.stage == "load"
+
+    def test_complexity_overshoot_short_circuits(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(factor_module, "MAX_AST_NODES", 1)
+        data = _make_bars()
+        result = evaluate_factor(_write(tmp_path, GOOD_FACTOR_SRC), data)
+
+        assert result.ok is False
+        assert result.stage == "complexity"
+        assert result.error is not None and "复杂度" in result.error
+        assert result.complexity is not None and result.complexity["ok"] is False
+
+
+class TestWarmupPropagation:
+    def test_module_warmup_is_passed_to_truncation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, int] = {}
+
+        def probe(compute, data, *, warmup=0, **kwargs):  # noqa: ANN001, ANN003
+            seen["warmup"] = warmup
+            return TruncationResult(
+                ok=True, n_checks=1, failures=(), skipped_reason=None
+            )
+
+        monkeypatch.setattr(factor_module, "check_truncation", probe)
+        data = _make_bars()
+        result = evaluate_factor(_write(tmp_path, WARMUP_FACTOR_SRC), data)
+
+        assert result.ok is True
+        assert seen["warmup"] == 10
+
+    def test_default_warmup_when_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, int] = {}
+
+        def probe(compute, data, *, warmup=0, **kwargs):  # noqa: ANN001, ANN003
+            seen["warmup"] = warmup
+            return TruncationResult(
+                ok=True, n_checks=1, failures=(), skipped_reason=None
+            )
+
+        monkeypatch.setattr(factor_module, "check_truncation", probe)
+        data = _make_bars()
+        evaluate_factor(_write(tmp_path, GOOD_FACTOR_SRC), data)
+
+        from quant.factor_api.truncation import DEFAULT_WARMUP_DAYS
+
+        assert seen["warmup"] == DEFAULT_WARMUP_DAYS
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+class TestCli:
+    def test_cli_writes_score_json_on_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data = _make_bars()
+        monkeypatch.setattr(factor_module, "load_bars", lambda *args, **kwargs: data)
+        factor_path = _write(tmp_path, GOOD_FACTOR_SRC)
+        out_path = tmp_path / "score.json"
+
+        code = main(
+            [str(factor_path), "--data-dir", str(tmp_path), "--out", str(out_path)]
+        )
+
+        assert code == 0
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        assert payload["higher_is_better"] is True
+        assert payload["score"] > 0.0
+        assert "过门控" in payload["notes"]
+        assert payload["details"]["gate_passed"] is True
+        metrics = payload["details"]["metrics"]
+        assert set(metrics) == {
+            "rank_ic_mean",
+            "rank_ic_std",
+            "icir",
+            "ic_win_rate",
+            "n_days",
+            "mono",
+            "turnover_mean",
+        }
+        assert payload["details"]["truncation"]["ok"] is True
+
+    def test_cli_reversed_factor_writes_negative_score(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data = _make_bars()
+        monkeypatch.setattr(factor_module, "load_bars", lambda *args, **kwargs: data)
+        factor_path = _write(tmp_path, REVERSED_FACTOR_SRC)
+        out_path = tmp_path / "score.json"
+
+        code = main(
+            [str(factor_path), "--data-dir", str(tmp_path), "--out", str(out_path)]
+        )
+
+        assert code == 0
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        assert payload["score"] < 0.0
+        assert payload["details"]["gate_passed"] is False
+        assert "未过门控" in payload["notes"]
+
+    def test_cli_hard_failure_writes_no_score(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        data = _make_bars()
+        monkeypatch.setattr(factor_module, "load_bars", lambda *args, **kwargs: data)
+        factor_path = _write(tmp_path, LOOKAHEAD_FACTOR_SRC)
+        out_path = tmp_path / "score.json"
+
+        code = main(
+            [str(factor_path), "--data-dir", str(tmp_path), "--out", str(out_path)]
+        )
+
+        assert code == 1
+        assert not out_path.exists()
+        captured = capsys.readouterr()
+        assert "truncation" in captured.err
+        assert "前视" in captured.err
