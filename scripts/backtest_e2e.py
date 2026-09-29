@@ -55,7 +55,7 @@ JSON，在 ``[start, end]`` 区间跑一次完整的 :class:`~quant.backtest.eng
 
 落盘（``--out-dir``）:: nav.parquet / report.md / account_states.md / nav.png / holdings.parquet
 指定 ``--benchmark`` 时额外落 ``benchmark.parquet``（基准 / 超额净值与日收益序列），
-报告「绩效」表追加基准年化 / 超额年化 / 跟踪误差 / 信息比率，净值图叠加基准曲线。
+报告「绩效」表追加基准年化 / 超额年化 / 跟踪误差 / 信息比率，净值图叠加基准与超额曲线。
 指定 ``--risk-report`` 时额外落 ``risk_report.md``（issue #69 四表，读 ``holdings.parquet``）。
 ``--strategy index_enhanced`` 时额外落 ``enhanced_log.parquet``（逐日优化日志）。
 """
@@ -119,6 +119,7 @@ from quant.data.cache import (  # noqa: E402
 from quant.eval.metrics import (  # noqa: E402
     BENCHMARK_NAV_COL,
     BenchmarkSummary,
+    EXCESS_NAV_COL,
     benchmark_nav_series,
     benchmark_performance,
 )
@@ -1413,7 +1414,7 @@ def render_report(
         lines.append(
             "基准 nav 与组合归一净值均以期初（首个共同交易日）归一为 1.0，"
             "`excess_nav = 组合归一净值 / 基准归一净值`；`benchmark.parquet` 落盘对齐序列。"
-            "净值图中基准曲线乘以初始资金，与组合 nav 同轴对比。"
+            "净值图中基准与超额曲线乘以初始资金，与组合 nav 同轴对比。"
         )
         lines.append("")
 
@@ -1733,11 +1734,20 @@ def build_holdings_weights(
 def _draw_nav(
     result: BacktestResult, path: Path, benchmark_series: pl.DataFrame | None = None
 ) -> None:
-    """画净值曲线（Agg 后端，不弹窗）；给了基准序列则叠加基准曲线。
+    """画净值曲线（Agg 后端，不弹窗）；给了基准序列则叠加基准与超额曲线。
 
-    基准以 ``benchmark_nav × 初始资金`` 与组合 nav 同轴对比。
+    基准 / 超额都以 ``× 初始资金`` 与组合 nav 同轴对比。
     """
-    nav = result.nav
+    write_nav_png(result.nav, result.initial_cash, path, benchmark_series)
+
+
+def write_nav_png(
+    nav: pl.DataFrame,
+    initial_cash: float,
+    path: Path,
+    benchmark_series: pl.DataFrame | None = None,
+) -> None:
+    """把净值 / 基准 / 超额三条曲线画到 ``path``（口径见 :func:`_draw_nav`）。"""
     if nav.height == 0:
         figure, axes = plt.subplots(figsize=(10, 4.5))
         axes.set_title("NAV (empty)")
@@ -1750,18 +1760,25 @@ def _draw_nav(
     axes.plot(dates, values, linewidth=1.2, color="#1f77b4", label="portfolio")
     if benchmark_series is not None and benchmark_series.height:
         benchmark_dates = benchmark_series[DATE_COL].to_list()
-        benchmark_values = [
-            value * result.initial_cash
-            for value in benchmark_series[BENCHMARK_NAV_COL].to_list()
-        ]
         axes.plot(
             benchmark_dates,
-            benchmark_values,
+            [value * initial_cash for value in benchmark_series[BENCHMARK_NAV_COL].to_list()],
             linewidth=1.0,
             color="#ff7f0e",
             label="benchmark (scaled to initial cash)",
         )
-        axes.legend(loc="best")
+        if EXCESS_NAV_COL in benchmark_series.columns:
+            axes.plot(
+                benchmark_dates,
+                [
+                    value * initial_cash
+                    for value in benchmark_series[EXCESS_NAV_COL].to_list()
+                ],
+                linewidth=1.0,
+                color="#2ca02c",
+                label="excess (scaled to initial cash)",
+            )
+    axes.legend(loc="best")
     axes.set_title("E2E Backtest NAV")
     axes.set_ylabel("NAV (CNY)")
     axes.grid(True, alpha=0.3)
