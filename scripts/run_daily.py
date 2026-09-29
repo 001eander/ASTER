@@ -37,6 +37,11 @@ from quant.daily.pipeline import (  # noqa: E402
     DailyReport,
     run_daily,
 )
+from quant.daily.strategy import (  # noqa: E402
+    StrategyConfig,
+    StrategyConfigError,
+    load_strategy_config,
+)
 from quant.daily.virtual_account import (  # noqa: E402
     DEFAULT_ACCOUNT_DIR,
     DEFAULT_ACCOUNT_NAME,
@@ -82,6 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_INITIAL_CASH,
         help=f"新建账户的起始现金，默认 {DEFAULT_INITIAL_CASH:.0f}",
     )
+    parser.add_argument(
+        "--strategy-config",
+        default=None,
+        help="策略配置 JSON 路径；缺省全市场量化选股（现状）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只计算并打印，不落盘")
     return parser
 
@@ -89,6 +99,10 @@ def _build_parser() -> argparse.ArgumentParser:
 def _print_summary(report: DailyReport, elapsed: float) -> None:
     print("\n# 每日跑批完成")
     print(f"信号日：{report.date.isoformat()}    账户：{report.account_name}")
+    print(
+        f"策略：{report.strategy}    池：{report.universe or '全市场'}    "
+        f"基准：{report.benchmark or '（未指定）'}    调仓频率：{report.rebalance_freq}"
+    )
     print(
         f"净值 {report.nav:.2f} = 现金 {report.cash:.2f} + 持仓市值 "
         f"{report.market_value:.2f}"
@@ -141,6 +155,22 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
 
+    strategy_config: StrategyConfig | None = None
+    if args.strategy_config:
+        try:
+            strategy_config = load_strategy_config(args.strategy_config)
+        except StrategyConfigError as exc:
+            print(f"策略配置不合法：{exc}", file=sys.stderr)
+            return 2
+        logger.info(
+            "策略配置：strategy=%s universe=%s benchmark=%s top_k=%d rebalance_freq=%s",
+            strategy_config.strategy,
+            strategy_config.universe,
+            strategy_config.benchmark,
+            strategy_config.top_k,
+            strategy_config.rebalance_freq,
+        )
+
     started = time.monotonic()
     report = run_daily(
         Path(args.data_dir),
@@ -152,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         orders_dir=DEFAULT_ORDERS_DIR,
         reports_dir=DEFAULT_REPORTS_DIR,
         initial_cash=args.initial_cash,
+        strategy_config=strategy_config,
         dry_run=args.dry_run,
     )
     _print_summary(report, time.monotonic() - started)

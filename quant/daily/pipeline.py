@@ -50,21 +50,41 @@ from quant.automl.dataset import (
 )
 from quant.automl.trainer import DEFAULT_MODEL_DIR, SCORE_COL, BaselineTrainer
 from quant.backtest.broker import PRICE_EPSILON
-from quant.data.cache import load_bars, load_calendar
+from quant.data.cache import load_bars, load_calendar, load_industry
+from quant.data.index_members import index_weights_on
 from quant.data.schema import board_of
 from quant.data.validate import validate
+from quant.daily.strategy import (
+    DEFAULT_STRATEGY,
+    StrategyConfig,
+    build_enhanced_optimizer,
+    build_stock_optimizer,
+    is_rebalance_day,
+)
 from quant.daily.virtual_account import (
     DEFAULT_ACCOUNT_DIR,
     DEFAULT_ACCOUNT_NAME,
     DEFAULT_INITIAL_CASH,
     VirtualAccount,
 )
+from quant.portfolio.enhanced import (
+    STATUS_HELD,
+    STATUS_RELAXED,
+    EnhancedOptimizer,
+)
 from quant.portfolio.optimizer import (
     InfeasibleError,
     OptimizeResult,
+    PortfolioError,
     PortfolioOptimizer,
 )
 from quant.portfolio.roundlot import round_weights_to_lots
+from quant.portfolio.style import (
+    STYLE_FACTOR_NAMES,
+    compute_style_factors,
+    equivalent_market_value,
+)
+from quant.universe.members import members
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +197,10 @@ class DailyReport:
     nav: float = 0.0
     cash: float = 0.0
     market_value: float = 0.0
+    strategy: str = DEFAULT_STRATEGY
+    universe: str | None = None
+    benchmark: str | None = None
+    rebalance_freq: str = "D"
     already_ran: bool = False
     relaxed: bool = False
     hold_fallback: bool = False
@@ -337,6 +361,8 @@ def run_daily(
     orders_dir: str | Path = DEFAULT_ORDERS_DIR,
     reports_dir: str | Path = DEFAULT_REPORTS_DIR,
     optimizer: PortfolioOptimizer | None = None,
+    enhanced_optimizer: EnhancedOptimizer | None = None,
+    strategy_config: StrategyConfig | None = None,
     trainer: BaselineTrainer | None = None,
     initial_cash: float = DEFAULT_INITIAL_CASH,
     validate_data: bool = True,
@@ -346,8 +372,15 @@ def run_daily(
 
     数据必须已由 ``scripts/daily_update.py`` 更新到 ``ref_date``。``dry_run=True`` 时
     只计算不落盘，也不改动虚拟账户。
+
+    ``strategy_config`` 缺省（``None``）时按现状走全市场量化选股 + PortfolioOptimizer；
+    给出后按配置的 ``strategy`` 分派：``stock_selection`` 仍走 PortfolioOptimizer，
+    ``index_enhanced`` 走 :class:`~quant.portfolio.enhanced.EnhancedOptimizer`，候选集为
+    基准成分 ∪ 打分为主 top-K ∪ 当前持仓。``universe`` 非空时打分先裁决到池内。
     """
     data_dir = Path(data_dir)
+    config = strategy_config if strategy_config is not None else StrategyConfig()
+    effective_top_k = config.top_k if strategy_config is not None else top_k
     account_path = VirtualAccount.path_for(Path(account_dir), account_name)
     signal_day = resolve_reference_date(data_dir, ref_date)
     account = VirtualAccount.load_or_create(
@@ -399,6 +432,15 @@ def run_daily(
         raise DailyError("模型打分在信号日全部为缺失，无法构建候选集")
     scores = scores.sort([SCORE_COL, INSTRUMENT_COL], descending=[True, False])
 
+    # -- 池内裁决（universe 非空时打分只保留当日 PIT 成员）----------------
+    if config.universe is not None:
+        pool = members(config.universe, signal_day, data_dir=data_dir)
+        if not pool:
+            raise DailyError(
+                f"股票池 {config.universe!r} 在 {signal_day} 没有成员，无法构建候选集"
+            )
+        scores = scores.filter(pl.col(INSTRUMENT_COL).is_in(sorted(pool)))
+
     # -- 账户估值与当前权重 ------------------------------------------------
     prices = _latest_prices(bars, signal_day)
     for instrument, position in account.positions.items():
@@ -415,40 +457,35 @@ def run_daily(
         if position.volume > 0
     }
 
-    # -- 候选集：top-K ∪ 当前持仓 -----------------------------------------
-    score_map = {
-        str(row[INSTRUMENT_COL]): float(row[SCORE_COL])
-        for row in scores.iter_rows(named=True)
-    }
-    min_score = min(score_map.values())
-    top_instruments = scores.head(top_k)[INSTRUMENT_COL].to_list()
-    candidates = list(top_instruments) + [
-        instrument
-        for instrument in current_volumes
-        if instrument not in set(top_instruments)
-    ]
-    candidates = [instrument for instrument in candidates if instrument in prices]
-    if not candidates:
-        raise DailyError("候选证券为空，无法优化")
-    alpha = {
-        instrument: score_map.get(instrument, min_score) for instrument in candidates
-    }
-
-    # -- 组合优化（含降级）-------------------------------------------------
-    active_optimizer = optimizer if optimizer is not None else PortfolioOptimizer()
-    returns = _returns_frame(bars, candidates, signal_day)
-    result = _optimize(
-        active_optimizer, alpha, candidates, returns, current_weights
-    )
+    # -- 候选集与组合优化（按 strategy 分派，含降级）-----------------------
+    if config.is_index_enhanced:
+        result, n_candidates, notes = _optimize_enhanced_path(
+            data_dir=data_dir,
+            bars=bars,
+            calendar=calendar,
+            scores=scores,
+            signal_day=signal_day,
+            prices=prices,
+            current_weights=current_weights,
+            current_volumes=current_volumes,
+            config=config,
+            top_k=effective_top_k,
+            optimizer=enhanced_optimizer,
+        )
+    else:
+        result, n_candidates, notes = _optimize_stock_path(
+            bars=bars,
+            scores=scores,
+            signal_day=signal_day,
+            prices=prices,
+            current_weights=current_weights,
+            current_volumes=current_volumes,
+            config=config,
+            top_k=effective_top_k,
+            optimizer=optimizer,
+        )
     relaxed = result.relaxed
     hold_fallback = result.hold_fallback
-    notes: list[str] = []
-    if relaxed:
-        notes.append(
-            f"组合优化不可行，已放宽 max_turnover 至 {MAX_TURNOVER_RELAXED:.1f} 重试成功"
-        )
-    if hold_fallback:
-        notes.append("*** 放宽后仍不可行：保持现有持仓，本次不调仓 ***")
 
     if result.optimize is None:
         target_weights = dict(current_weights)
@@ -481,9 +518,13 @@ def run_daily(
         nav=nav,
         cash=account.cash,
         market_value=market_value,
+        strategy=config.strategy,
+        universe=config.universe,
+        benchmark=config.benchmark,
+        rebalance_freq=config.rebalance_freq,
         relaxed=relaxed,
         hold_fallback=hold_fallback,
-        n_candidates=len(candidates),
+        n_candidates=n_candidates,
         scores=scores,
         top_scores=[
             (str(row[INSTRUMENT_COL]), float(row[SCORE_COL]))
@@ -559,6 +600,232 @@ def _optimize(
     except InfeasibleError:
         logger.error("放宽换手后组合仍不可行，保持现有持仓")
         return _OptimizeOutcome(optimize=None, relaxed=True, hold_fallback=True)
+
+
+# ---------------------------------------------------------------------------
+# 策略分派
+# ---------------------------------------------------------------------------
+
+
+def _optimize_stock_path(
+    *,
+    bars: pl.DataFrame,
+    scores: pl.DataFrame,
+    signal_day: date,
+    prices: Mapping[str, float],
+    current_weights: Mapping[str, float],
+    current_volumes: Mapping[str, int],
+    config: StrategyConfig,
+    top_k: int,
+    optimizer: PortfolioOptimizer | None,
+) -> tuple[_OptimizeOutcome, int, list[str]]:
+    """stock_selection 路径：top-K ∪ 当前持仓 → PortfolioOptimizer（含放宽换手）。"""
+    score_map = {
+        str(row[INSTRUMENT_COL]): float(row[SCORE_COL])
+        for row in scores.iter_rows(named=True)
+    }
+    if not score_map:
+        raise DailyError("打分全空，无法构建候选集")
+    min_score = min(score_map.values())
+    top_instruments = [str(inst) for inst in scores.head(top_k)[INSTRUMENT_COL].to_list()]
+    candidates = list(top_instruments) + [
+        instrument
+        for instrument in current_volumes
+        if instrument not in set(top_instruments)
+    ]
+    candidates = [instrument for instrument in candidates if instrument in prices]
+    if not candidates:
+        raise DailyError("候选证券为空，无法优化")
+    alpha = {
+        instrument: score_map.get(instrument, min_score) for instrument in candidates
+    }
+
+    active_optimizer = optimizer if optimizer is not None else build_stock_optimizer(config)
+    returns = _returns_frame(bars, candidates, signal_day)
+    outcome = _optimize(active_optimizer, alpha, candidates, returns, current_weights)
+    notes: list[str] = []
+    if outcome.relaxed:
+        notes.append(
+            f"组合优化不可行，已放宽 max_turnover 至 {MAX_TURNOVER_RELAXED:.1f} 重试成功"
+        )
+    if outcome.hold_fallback:
+        notes.append("*** 放宽后仍不可行：保持现有持仓，本次不调仓 ***")
+    return outcome, len(candidates), notes
+
+
+def _optimize_enhanced_path(
+    *,
+    data_dir: Path,
+    bars: pl.DataFrame,
+    calendar: pl.DataFrame,
+    scores: pl.DataFrame,
+    signal_day: date,
+    prices: Mapping[str, float],
+    current_weights: Mapping[str, float],
+    current_volumes: Mapping[str, int],
+    config: StrategyConfig,
+    top_k: int,
+    optimizer: EnhancedOptimizer | None,
+) -> tuple[_OptimizeOutcome, int, list[str]]:
+    """index_enhanced 路径：基准成分 ∪ top-K ∪ 当前持仓 → EnhancedOptimizer。
+
+    基准权重取信号日或之前最近的 PIT 日频权重；非调仓日保持现有持仓。
+    EnhancedOptimizer 内部自带放松阶梯，``STATUS_HELD`` 视为保持现持仓降级。
+    """
+    notes: list[str] = []
+    if config.benchmark is None:
+        raise DailyError("index_enhanced 策略缺少 benchmark")
+    bench_weights = _benchmark_weights(data_dir, config.benchmark, signal_day)
+    if not bench_weights:
+        raise DailyError(
+            f"基准 {config.benchmark} 在 {signal_day} 及以前没有权重数据，"
+            "请先跑 index 更新（build_daily_tables）"
+        )
+
+    score_map = {
+        str(row[INSTRUMENT_COL]): float(row[SCORE_COL])
+        for row in scores.iter_rows(named=True)
+    }
+    if not score_map:
+        raise DailyError("打分全空，无法构建候选集")
+    min_score = min(score_map.values())
+    top_instruments = [str(inst) for inst in scores.head(top_k)[INSTRUMENT_COL].to_list()]
+    ordered = list(
+        dict.fromkeys([*sorted(bench_weights), *top_instruments, *current_volumes])
+    )
+    candidates = [instrument for instrument in ordered if instrument in prices]
+    if not candidates:
+        raise DailyError("候选证券为空，无法优化")
+
+    open_days = calendar.filter(pl.col("is_open"))[DATE_COL].to_list()
+    if not is_rebalance_day(open_days, signal_day, config.rebalance_freq):
+        notes.append(
+            f"{signal_day.isoformat()} 非 {config.rebalance_freq} 调仓日，保持现有持仓"
+        )
+        return _OptimizeOutcome(optimize=None, hold_fallback=True), len(candidates), notes
+
+    alpha = {
+        instrument: score_map.get(instrument, min_score) for instrument in candidates
+    }
+    active_optimizer = (
+        optimizer if optimizer is not None else build_enhanced_optimizer(config)
+    )
+    returns = _returns_frame(bars, candidates, signal_day)
+    industry, float_mv, style = _enhanced_exposures(
+        data_dir, bars, signal_day, candidates, bench_weights
+    )
+    candidate_set = set(candidates)
+    w_prev = {
+        instrument: float(weight)
+        for instrument, weight in current_weights.items()
+        if instrument in candidate_set
+    }
+    try:
+        enhanced = active_optimizer.optimize_day(
+            date=signal_day,
+            instruments=candidates,
+            alpha=alpha,
+            bench_weights=bench_weights,
+            industry=industry,
+            float_mv=float_mv,
+            style=style,
+            covariance=returns,
+            w_prev=w_prev or None,
+        )
+    except (ValueError, PortfolioError) as exc:
+        logger.error("指增优化异常，保持现有持仓：%s", exc)
+        notes.append(f"*** 指增优化异常：保持现有持仓，本次不调仓（{exc}）***")
+        return (
+            _OptimizeOutcome(optimize=None, relaxed=True, hold_fallback=True),
+            len(candidates),
+            notes,
+        )
+
+    if enhanced.status == STATUS_HELD:
+        notes.append("*** 指增优化失败：保持现有持仓，本次不调仓 ***")
+        return (
+            _OptimizeOutcome(optimize=None, relaxed=True, hold_fallback=True),
+            len(candidates),
+            notes,
+        )
+    relaxed = enhanced.status == STATUS_RELAXED
+    if relaxed:
+        notes.append("指增优化经放松阶梯后求解成功")
+    outcome = _OptimizeOutcome(
+        optimize=OptimizeResult(
+            weights=dict(enhanced.weights),
+            objective=float(enhanced.objective if enhanced.objective is not None else 0.0),
+            turnover=float(enhanced.turnover),
+            status=enhanced.status,
+        ),
+        relaxed=relaxed,
+        turnover=float(enhanced.turnover),
+    )
+    return outcome, len(candidates), notes
+
+
+def _benchmark_weights(
+    data_dir: Path, index_code: str, signal_day: date
+) -> dict[str, float]:
+    """基准在信号日或之前最近的 PIT 权重 ``{instrument: weight}``（原始口径，和约 1）。"""
+    frame = index_weights_on(Path(data_dir), index_code, signal_day)
+    return {
+        str(row["instrument"]): float(row["weight"])
+        for row in frame.iter_rows(named=True)
+    }
+
+
+def _enhanced_exposures(
+    data_dir: Path,
+    bars: pl.DataFrame,
+    signal_day: date,
+    candidates: Sequence[str],
+    bench_weights: Mapping[str, float],
+) -> tuple[dict[str, str], dict[str, float], dict[str, dict[str, float]]]:
+    """组装指增优化所需的行业 / 等效市值 / 六风格暴露映射（均按 cutoff 截取）。"""
+    covered = sorted(set(candidates) | set(bench_weights))
+    industry_frame = load_industry(
+        data_dir, as_of=signal_day, instruments=covered
+    )
+    industry = {
+        str(row["instrument"]): str(row["industry_l1"])
+        for row in industry_frame.iter_rows(named=True)
+    }
+    return industry, _float_mv_map(bars, signal_day), _style_map(bars, signal_day)
+
+
+def _float_mv_map(bars: pl.DataFrame, signal_day: date) -> dict[str, float]:
+    """每只证券 ``<= signal_day`` 最近一个等效市值 ``close × adjfactor``。"""
+    frame = equivalent_market_value(bars)
+    window = frame.filter(pl.col(DATE_COL) <= signal_day).sort(
+        [INSTRUMENT_COL, DATE_COL]
+    )
+    if window.height == 0:
+        return {}
+    latest = window.group_by(INSTRUMENT_COL).agg(pl.col("equiv_mv").last())
+    return {
+        str(row[INSTRUMENT_COL]): float(row["equiv_mv"])
+        for row in latest.iter_rows(named=True)
+    }
+
+
+def _style_map(bars: pl.DataFrame, signal_day: date) -> dict[str, dict[str, float]]:
+    """每只证券 ``<= signal_day`` 最近一日的六风格暴露。"""
+    frame = compute_style_factors(bars)
+    window = frame.filter(pl.col(DATE_COL) <= signal_day).sort(
+        [INSTRUMENT_COL, DATE_COL]
+    )
+    if window.height == 0:
+        return {}
+    latest = window.group_by(INSTRUMENT_COL).agg(
+        [pl.col(name).last() for name in STYLE_FACTOR_NAMES]
+    )
+    return {
+        str(row[INSTRUMENT_COL]): {
+            name: float(row[name]) for name in STYLE_FACTOR_NAMES
+        }
+        for row in latest.iter_rows(named=True)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +1016,10 @@ def _report_dict(report: DailyReport) -> dict[str, Any]:
     return {
         "date": report.date.isoformat(),
         "account_name": report.account_name,
+        "strategy": report.strategy,
+        "universe": report.universe,
+        "benchmark": report.benchmark,
+        "rebalance_freq": report.rebalance_freq,
         "already_ran": report.already_ran,
         "relaxed": report.relaxed,
         "hold_fallback": report.hold_fallback,
