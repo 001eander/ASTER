@@ -31,9 +31,10 @@ JSON，在 ``[start, end]`` 区间跑一次完整的 :class:`~quant.backtest.eng
         --initial-cash 1000000 --top-k 50 --lookback-days 250 \
         --benchmark 000905 --out-dir runs/e2e
 
-落盘（``--out-dir``）:: nav.parquet / report.md / account_states.md / nav.png
+落盘（``--out-dir``）:: nav.parquet / report.md / account_states.md / nav.png / holdings.parquet
 指定 ``--benchmark`` 时额外落 ``benchmark.parquet``（基准 / 超额净值与日收益序列），
 报告「绩效」表追加基准年化 / 超额年化 / 跟踪误差 / 信息比率，净值图叠加基准曲线。
+指定 ``--risk-report`` 时额外落 ``risk_report.md``（issue #69 四表，读 ``holdings.parquet``）。
 """
 from __future__ import annotations
 
@@ -177,6 +178,8 @@ class E2EConfig:
     train_config_path: Path | None = None
     #: 基准指数代码（六位，如 ``000905``）；None 表示不计算基准 / 超额绩效。
     benchmark: str | None = None
+    #: 是否额外产出持仓风险分析四表（``risk_report.md``，issue #69）。
+    risk_report: bool = False
 
     @property
     def resolved_train_config_path(self) -> Path:
@@ -219,6 +222,10 @@ class E2EResult:
     benchmark: BenchmarkSummary | None = None
     benchmark_series: pl.DataFrame | None = None
     benchmark_path: Path | None = None
+    #: 逐日持仓权重落盘路径（``holdings.parquet``，issue #69）。
+    holdings_path: Path | None = None
+    #: 持仓风险分析 markdown 路径（``--risk-report`` 未开启时为 None）。
+    risk_report_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +580,10 @@ def run_e2e(
         benchmark_summary,
         benchmark_series,
     )
+    holdings_path = config.out_dir / "holdings.parquet"
+    holdings = build_holdings_weights(result, close_panel)
+    holdings.write_parquet(holdings_path)
+    risk_report_path = _write_risk_report(config, holdings)
     metrics = compute_metrics(result)
     logger.info(
         "回测完成：%d 个交易日，期末净值 %.2f，总收益 %.2f%%，耗时 %.1fs",
@@ -594,6 +605,8 @@ def run_e2e(
         benchmark=benchmark_summary,
         benchmark_series=benchmark_series,
         benchmark_path=benchmark_path,
+        holdings_path=holdings_path,
+        risk_report_path=risk_report_path,
     )
 
 
@@ -629,6 +642,35 @@ def _load_benchmark(
         summary.information_ratio or 0.0,
     )
     return summary, series
+
+
+def _write_risk_report(config: E2EConfig, holdings: pl.DataFrame) -> Path | None:
+    """按需产出持仓风险分析四表；失败只告警，不影响回测主流程。"""
+    if not config.risk_report:
+        return None
+    if holdings.height == 0:
+        logger.warning("持仓为空，跳过持仓风险分析")
+        return None
+    from scripts.risk_report import MV_SHARE_CONST, run as run_risk_report
+
+    try:
+        text, _ = run_risk_report(
+            holdings=holdings,
+            data_dir=config.data_dir,
+            benchmark=config.benchmark,
+            share_const=MV_SHARE_CONST,
+            check_consistency=False,
+            industry_tol=None,
+            style_tol=None,
+            market_value_tol=None,
+        )
+    except Exception as exc:  # noqa: BLE001 - 报告属于可选产出
+        logger.warning("持仓风险分析产出失败：%s", exc)
+        return None
+    path = config.out_dir / "risk_report.md"
+    path.write_text(text, encoding="utf-8")
+    logger.info("持仓风险分析已写入 %s", path)
+    return path
 
 
 def _group_scores(
@@ -1026,6 +1068,40 @@ def _reconstruct_positions(
     return snapshots
 
 
+def build_holdings_weights(
+    result: BacktestResult, close_panel: pl.DataFrame
+) -> pl.DataFrame:
+    """从回测成交流水重建逐日持仓权重 ``(date, instrument, weight)``。
+
+    权重按当日已定价持仓的市值归一（停牌无价持仓不计入，避免把现金混进行业 / 风格
+    暴露）。输出落 ``holdings.parquet``，供 ``scripts/risk_report.py`` 消费。
+    """
+    nav_dates = [row["date"] for row in result.nav.iter_rows(named=True)]
+    positions = _reconstruct_positions(nav_dates, result.fills, result.corporate_actions)
+    rows: list[dict[str, object]] = []
+    for day in nav_dates:
+        held = positions.get(day, {})
+        if not held:
+            continue
+        prices = _close_on(close_panel, day)
+        values = {
+            instrument: volume * prices[instrument]
+            for instrument, volume in held.items()
+            if prices.get(instrument, 0.0) > 0.0
+        }
+        total = float(sum(values.values()))
+        if total <= 0.0:
+            continue
+        rows.extend(
+            {"date": day, "instrument": instrument, "weight": value / total}
+            for instrument, value in sorted(values.items())
+        )
+    return pl.DataFrame(
+        rows,
+        schema={"date": pl.Date, "instrument": pl.String, "weight": pl.Float64},
+    )
+
+
 def _draw_nav(
     result: BacktestResult, path: Path, benchmark_series: pl.DataFrame | None = None
 ) -> None:
@@ -1120,6 +1196,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="基准指数代码（六位，如 000905），给了就输出基准 / 超额绩效与净值叠加",
     )
+    parser.add_argument(
+        "--risk-report",
+        action="store_true",
+        help="额外产出持仓风险分析四表 risk_report.md（issue #69）",
+    )
     return parser
 
 
@@ -1157,6 +1238,10 @@ def _print_summary(result: E2EResult) -> None:
     print(f"净值图：{result.png_path}")
     if result.benchmark_path is not None:
         print(f"基准序列：{result.benchmark_path}")
+    if result.holdings_path is not None:
+        print(f"持仓权重：{result.holdings_path}")
+    if result.risk_report_path is not None:
+        print(f"风险分析：{result.risk_report_path}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1183,6 +1268,7 @@ def main(argv: list[str] | None = None) -> int:
         horizon=args.horizon,
         train_config_path=Path(args.train_config) if args.train_config else None,
         benchmark=args.benchmark,
+        risk_report=args.risk_report,
     )
     result = run_e2e(config)
     _print_summary(result)

@@ -394,6 +394,19 @@ def read_index_members(data_dir: Path) -> pl.DataFrame:
     )
 
 
+def read_index_weights(data_dir: Path) -> pl.DataFrame:
+    """读取日频 PIT 权重表（``index_weights.parquet``），缺失返回空表。"""
+    path = _derived_weights_path(data_dir)
+    if not path.exists():
+        return pl.DataFrame(schema=INDEX_WEIGHTS)
+    return (
+        pl.read_parquet(path)
+        .select(list(INDEX_WEIGHTS.keys()))
+        .cast(INDEX_WEIGHTS)
+        .sort(["index_code", "date", "instrument"])
+    )
+
+
 def read_drift_check(data_dir: Path) -> pl.DataFrame:
     """读取漂移对拍明细，缺失返回空表。"""
     path = _drift_path(data_dir)
@@ -577,6 +590,7 @@ __all__ = [
     "read_anchor_weights",
     "read_drift_check",
     "read_index_members",
+    "read_index_weights",
     "read_snapshots",
     "rebalance_effective_dates",
     "run_index_update",
