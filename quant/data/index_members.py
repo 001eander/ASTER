@@ -490,6 +490,23 @@ def _merge_anchors(existing: pl.DataFrame, incoming: pl.DataFrame) -> pl.DataFra
     return out
 
 
+def merge_member_snapshots(existing: pl.DataFrame, incoming: pl.DataFrame) -> pl.DataFrame:
+    """合并成分快照：``incoming`` 中同 ``(index_code, snapshot_date)`` 的名单整份覆盖。
+
+    公开封装 :func:`_merge_snapshots`，供历史回填脚本复用同一套去重口径。
+    """
+    return _merge_snapshots(existing, incoming)
+
+
+def merge_weight_anchors(base: pl.DataFrame, override: pl.DataFrame) -> pl.DataFrame:
+    """合并权重锚：``override`` 中同 ``(index_code, date)`` 的权重覆盖 ``base``。
+
+    ``base`` 放近似锚、``override`` 放官方锚即得「官方锚优先」。公开封装
+    :func:`_merge_anchors`。
+    """
+    return _merge_anchors(base, override)
+
+
 def build_daily_tables(data_dir: Path, *, end: date | None = None) -> dict[str, int]:
     """从快照与锚重建日频成分表、日频权重表与对拍明细，返回各表行数。"""
     data_dir = Path(data_dir)
@@ -611,6 +628,8 @@ __all__ = [
     "drift_weights",
     "expand_member_snapshots",
     "index_weights_on",
+    "merge_member_snapshots",
+    "merge_weight_anchors",
     "read_anchor_weights",
     "read_drift_check",
     "read_index_members",

@@ -8,6 +8,9 @@
 - 漂移-官方对拍误差；
 - ``build_daily_tables`` 端到端落盘；
 - ``update_index_anchors`` 幂等与变更落盘；
+- CSMAR 变更表解析（过滤 / 去重 / 归一化）；
+- 逆放重建历史成分与正放不变式；
+- 等效市值权重锚（含停牌票剔除）与官方锚优先合并；
 - validate 的成分/权重/漂移检查触发与不触发。
 """
 from __future__ import annotations
@@ -18,10 +21,21 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from quant.data.index_history import (
+    CHANGE_ADD,
+    CHANGE_DROP,
+    build_equivalent_anchors,
+    check_reconstruction_invariant,
+    compare_equivalent_to_official,
+    market_cap_weights_on,
+    read_csmar_changes,
+    reconstruct_snapshots,
+)
 from quant.data.index_members import (
     build_daily_tables,
     drift_weights,
     expand_member_snapshots,
+    merge_weight_anchors,
     read_anchor_weights,
     read_drift_check,
     read_index_members,
@@ -36,6 +50,7 @@ from quant.data.schema import (
     DAILY_BARS,
     INDEX_DRIFT_CHECK,
     INDEX_MEMBERS,
+    INDEX_MEMBER_CHANGES,
     INDEX_MEMBER_SNAPSHOTS,
     INDEX_WEIGHTS,
     INDUSTRY,
@@ -538,3 +553,249 @@ def test_validate_drift_deviation_warns(tmp_path: Path) -> None:
     report = validate(tmp_path)
     assert report.ok
     assert "index_weight_drift_deviation" in {issue.check for issue in report.issues}
+
+
+# ---------------------------------------------------------------------------
+# CSMAR 变更表解析
+# ---------------------------------------------------------------------------
+
+_CSMAR_HEADER = (
+    "Indexcd,Chgsmp01,Chgsmp02,Chgsmp03,Chgsmp04,Chgsmp05,Chgsmp06,Chgsmp07"
+)
+
+
+def _write_csmar(tmp_path: Path, name: str, rows: list[tuple[str, ...]]) -> Path:
+    path = tmp_path / name
+    body = "\n".join(",".join(row) for row in rows)
+    path.write_text(f"{_CSMAR_HEADER}\n{body}\n", encoding="utf-8")
+    return path
+
+
+def test_read_csmar_changes_filters_and_dedups(tmp_path: Path) -> None:
+    path = _write_csmar(
+        tmp_path,
+        "IDX_Chgsmp.csv",
+        [
+            # 目标指数 + 股票类 + 前导零代码。
+            ("000300", "2024-06-17", "000001", "平安银行", "1", "1", "2024-06-07", "SZSE"),
+            ("000300", "2024-06-17", "600000", "浦发银行", "2", "1", "2024-06-07", "SSE"),
+            # 完全重复的一行，应被去重。
+            ("000300", "2024-06-17", "000001", "平安银行", "1", "1", "2024-06-07", "SZSE"),
+            # 基金类（Chgsmp05=2）应过滤。
+            ("000300", "2024-06-17", "510300", "沪深300ETF", "1", "2", "2024-06-07", "SSE"),
+            # 非目标指数应过滤。
+            ("000905", "2024-06-17", "600519", "贵州茅台", "1", "1", "2024-06-07", "SSE"),
+        ],
+    )
+    out = read_csmar_changes([path], index_codes=("000300",))
+    assert out.height == 2
+    assert set(out["instrument"].to_list()) == {"000001.SZ", "600000.SH"}
+    assert set(out["change_type"].to_list()) == {CHANGE_ADD, CHANGE_DROP}
+    assert out["effective_date"].to_list() == [date(2024, 6, 17)] * 2
+    assert out.schema == pl.Schema(INDEX_MEMBER_CHANGES)
+
+
+def test_read_csmar_changes_empty_when_no_files() -> None:
+    out = read_csmar_changes([])
+    assert out.height == 0
+    assert out.schema == pl.Schema(INDEX_MEMBER_CHANGES)
+
+
+# ---------------------------------------------------------------------------
+# 逆放重建与正放不变式
+# ---------------------------------------------------------------------------
+
+
+def _changes_frame(rows: list[tuple[str, date, str, int]]) -> pl.DataFrame:
+    return pl.DataFrame(
+        [
+            {
+                "index_code": code,
+                "effective_date": day,
+                "instrument": instrument,
+                "change_type": mode,
+            }
+            for code, day, instrument, mode in rows
+        ],
+        schema=INDEX_MEMBER_CHANGES,
+    )
+
+
+def _base_frame(code: str, day: date, instruments: list[str]) -> pl.DataFrame:
+    return pl.DataFrame(
+        [
+            {"snapshot_date": day, "instrument": instrument, "index_code": code}
+            for instrument in instruments
+        ],
+        schema=INDEX_MEMBER_SNAPSHOTS,
+    )
+
+
+def test_reconstruct_snapshots_reverse_apply() -> None:
+    # S0={000001.SZ,000002.SZ,000003.SZ} -> 6/13 换入 000004.SZ 换出 000001.SZ
+    # -> S1={000002.SZ,000003.SZ,000004.SZ} -> 6/17 换入 000005.SZ 换出 000002.SZ
+    # -> S2={000003.SZ,000004.SZ,000005.SZ}
+    base = _base_frame(
+        "000300",
+        date(2024, 6, 20),
+        ["000003.SZ", "000004.SZ", "000005.SZ"],
+    )
+    changes = _changes_frame(
+        [
+            ("000300", date(2024, 6, 13), "000004.SZ", CHANGE_ADD),
+            ("000300", date(2024, 6, 13), "000001.SZ", CHANGE_DROP),
+            ("000300", date(2024, 6, 17), "000005.SZ", CHANGE_ADD),
+            ("000300", date(2024, 6, 17), "000002.SZ", CHANGE_DROP),
+        ]
+    )
+    out = reconstruct_snapshots(changes, base, coverage_start=None)
+    by_date = {
+        day: set(
+            out.filter(pl.col("snapshot_date") == day)["instrument"].to_list()
+        )
+        for day in (date(2024, 6, 13), date(2024, 6, 17))
+    }
+    assert by_date[date(2024, 6, 17)] == {"000003.SZ", "000004.SZ", "000005.SZ"}
+    assert by_date[date(2024, 6, 13)] == {"000002.SZ", "000003.SZ", "000004.SZ"}
+    # 正放回推与逆放路径一致。
+    check_reconstruction_invariant(changes, out)
+
+
+def test_reconstruct_snapshots_coverage_start_keeps_latest_pre_window() -> None:
+    base = _base_frame(
+        "000300",
+        date(2024, 6, 20),
+        ["000001.SZ", "000002.SZ", "000003.SZ"],
+    )
+    changes = _changes_frame(
+        [
+            ("000300", date(2024, 6, 3), "000001.SZ", CHANGE_ADD),
+            ("000300", date(2024, 6, 13), "000002.SZ", CHANGE_ADD),
+            ("000300", date(2024, 6, 17), "000003.SZ", CHANGE_ADD),
+        ]
+    )
+    out = reconstruct_snapshots(changes, base, coverage_start=date(2024, 6, 14))
+    # 只保留「最近一次 <= 6/14 的变更日」（6/13）及其之后。
+    assert set(out["snapshot_date"].unique().to_list()) == {
+        date(2024, 6, 13),
+        date(2024, 6, 17),
+    }
+
+
+def test_check_reconstruction_invariant_raises_on_tamper() -> None:
+    # 与逆放用例同构：S0={1,2,3} -> 6/13 换入 4 换出 1 -> 6/17 换入 5 换出 2。
+    base = _base_frame(
+        "000300",
+        date(2024, 6, 20),
+        ["000003.SZ", "000004.SZ", "000005.SZ"],
+    )
+    changes = _changes_frame(
+        [
+            ("000300", date(2024, 6, 13), "000004.SZ", CHANGE_ADD),
+            ("000300", date(2024, 6, 13), "000001.SZ", CHANGE_DROP),
+            ("000300", date(2024, 6, 17), "000005.SZ", CHANGE_ADD),
+            ("000300", date(2024, 6, 17), "000002.SZ", CHANGE_DROP),
+        ]
+    )
+    out = reconstruct_snapshots(changes, base, coverage_start=None)
+    assert out.filter(pl.col("snapshot_date") == date(2024, 6, 13)).height == 3
+    check_reconstruction_invariant(changes, out)  # 原样应通过
+    # 篡改 6/13 快照（漏掉 6/13 换入、6/17 仍在的 000004.SZ）后不变式应失败。
+    tampered = out.filter(
+        ~(
+            (pl.col("snapshot_date") == date(2024, 6, 13))
+            & (pl.col("instrument") == "000004.SZ")
+        )
+    )
+    with pytest.raises(ValueError, match="不变式失败"):
+        check_reconstruction_invariant(changes, tampered)
+
+
+# ---------------------------------------------------------------------------
+# 等效市值权重锚
+# ---------------------------------------------------------------------------
+
+
+def test_market_cap_weights_drops_suspended() -> None:
+    members = pl.DataFrame({"instrument": ["600000.SH", "000001.SZ", "300750.SZ"]})
+    bars = pl.DataFrame(
+        [
+            _bar(date(2024, 6, 17), "600000.SH", close=10.0, adjfactor=1.0),
+            _bar(date(2024, 6, 17), "000001.SZ", close=20.0, adjfactor=2.0),
+            # 300750.SZ 当日报价缺失（停牌），应剔除。
+        ],
+        schema=DAILY_BARS,
+    )
+    weights, dropped = market_cap_weights_on(members, bars, date(2024, 6, 17))
+    table = {row["instrument"]: row["weight"] for row in weights.iter_rows(named=True)}
+    assert table["600000.SH"] == pytest.approx(10.0 / 50.0)
+    assert table["000001.SZ"] == pytest.approx(40.0 / 50.0)
+    assert dropped["instrument"].to_list() == ["300750.SZ"]
+
+
+def test_build_equivalent_anchors_clamps_to_open_day() -> None:
+    # 快照日 6/15 非开市日，锚日顺延到 6/17。
+    snapshots = _base_frame("000300", date(2024, 6, 15), ["600000.SH", "000001.SZ"])
+    bars = pl.DataFrame(
+        [
+            _bar(date(2024, 6, 17), "600000.SH", close=10.0, adjfactor=1.0),
+            _bar(date(2024, 6, 17), "000001.SZ", close=30.0, adjfactor=1.0),
+        ],
+        schema=DAILY_BARS,
+    )
+    anchors, dropped = build_equivalent_anchors(
+        snapshots, bars, [date(2024, 6, 14), date(2024, 6, 17)], index_codes=("000300",)
+    )
+    assert anchors["date"].unique().to_list() == [date(2024, 6, 17)]
+    assert anchors["weight"].sum() == pytest.approx(1.0)
+    assert dropped.height == 0
+
+
+def test_compare_equivalent_to_official_reports_deviation() -> None:
+    official = pl.DataFrame(
+        [
+            _anchor(date(2024, 6, 17), "600000.SH", 0.5),
+            _anchor(date(2024, 6, 17), "000001.SZ", 0.5),
+        ],
+        schema=INDEX_WEIGHTS,
+    )
+    bars = pl.DataFrame(
+        [
+            _bar(date(2024, 6, 17), "600000.SH", close=10.0, adjfactor=1.0),
+            _bar(date(2024, 6, 17), "000001.SZ", close=30.0, adjfactor=1.0),
+        ],
+        schema=DAILY_BARS,
+    )
+    out = compare_equivalent_to_official(official, bars)
+    assert out.height == 2
+    row = out.filter(pl.col("instrument") == "000001.SZ").row(0, named=True)
+    assert row["equivalent_weight"] == pytest.approx(0.75)
+    assert row["official_weight"] == pytest.approx(0.5)
+    assert row["abs_deviation"] == pytest.approx(0.25)
+
+
+def test_merge_weight_anchors_official_priority() -> None:
+    # 锚按 (index_code, date) 整份覆盖：同一日的官方锚整体替换近似锚。
+    approx = pl.DataFrame(
+        [
+            _anchor(date(2024, 6, 13), "600000.SH", 0.5),
+            _anchor(date(2024, 6, 17), "600000.SH", 0.5),
+            _anchor(date(2024, 6, 17), "000001.SZ", 0.5),
+        ],
+        schema=INDEX_WEIGHTS,
+    )
+    official = pl.DataFrame(
+        [
+            _anchor(date(2024, 6, 17), "600000.SH", 0.7),
+            _anchor(date(2024, 6, 17), "000001.SZ", 0.3),
+        ],
+        schema=INDEX_WEIGHTS,
+    )
+    merged = merge_weight_anchors(approx, official)
+    day17 = {
+        row["instrument"]: row["weight"]
+        for row in merged.filter(pl.col("date") == date(2024, 6, 17)).iter_rows(named=True)
+    }
+    assert day17 == {"600000.SH": pytest.approx(0.7), "000001.SZ": pytest.approx(0.3)}
+    # 无官方锚的日期保留近似值。
+    assert merged.filter(pl.col("date") == date(2024, 6, 13)).height == 1

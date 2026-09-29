@@ -150,6 +150,18 @@ INDUSTRY = pl.Schema(
     }
 )
 
+#: 指数取样变更流水表（issue #64 历史回填）。来自 CSMAR 指数取样变更表等
+#: 离线导出，一行一次成分变动。``change_type`` 1=新增、2=剔除；
+#: ``effective_date`` 为变更生效日（首个按新名单交易的交易日）。
+INDEX_MEMBER_CHANGES = pl.Schema(
+    {
+        "index_code": pl.String,
+        "effective_date": pl.Date,
+        "instrument": pl.String,
+        "change_type": pl.Int8,
+    }
+)
+
 #: 指数成分快照表（官方成分名单的原始落地形态）。
 #: ``snapshot_date`` 为该名单的生效日（首个按新名单交易的交易日），
 #: 单只指数同一生效日对应一份完整成分名单，展开到日频由 index_members 负责。
