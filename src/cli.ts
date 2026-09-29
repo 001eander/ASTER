@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { continueBudget, parseArgs, parseBudget, parseProposalMs, parseSandboxMs } from "./budget.js";
 import { runInnerLoop } from "./inner-loop.js";
+import { DEFAULT_DIRECTION_QUOTA } from "./inspiration-queue.js";
 import { parseProposalRewrites } from "./proposal-rewrite.js";
 import { createPiContext, createPiProposal } from "./pi-agents.js";
 import { DEFAULT_CONTEXT_MODEL, DEFAULT_PROPOSAL_MODEL } from "./role-model.js";
@@ -51,11 +52,16 @@ async function runCommand(args: Map<string, string | boolean>): Promise<void> {
     maxSandboxes?: number;
     maxSolutions?: number;
     maxMs?: number;
+    directionQuota?: number;
   }>(path.join(runDir, "run.json"));
   const live = await readJson<{ consumedMs?: number }>(path.join(runDir, "live.json"));
   const noLimits = args.get("no-limits") === true;
   const proposals = Number(args.get("proposals") ?? saved?.maxProposals ?? 3);
   const sandboxes = Number(args.get("sandboxes") ?? saved?.maxSandboxes ?? 2);
+  // 同一方向组的并发灵感上限，防止并行 Proposal 一窝蜂挖同一信号源。
+  const directionQuota = Number(
+    args.get("direction-quota") ?? saved?.directionQuota ?? DEFAULT_DIRECTION_QUOTA,
+  );
   const budget = saved
     ? continueBudget(
         { maxSolutions: saved.maxSolutions, maxMs: saved.maxMs },
@@ -127,6 +133,7 @@ async function runCommand(args: Map<string, string | boolean>): Promise<void> {
   console.log(`context ${contextModel}`);
   console.log(`proposal ${proposalModel}`);
   console.log(`rewrites ${proposalRewrites}`);
+  console.log(`direction quota ${directionQuota}`);
   console.log(`write ${proposalMs === undefined ? "unlimited" : `${proposalMs}ms`}`);
   console.log(`sandbox ${sandboxMs === undefined ? "unlimited" : `${sandboxMs}ms`}`);
   if (noLimits) console.log("limits off");
@@ -142,6 +149,7 @@ async function runCommand(args: Map<string, string | boolean>): Promise<void> {
       maxSandboxes: sandboxes,
       lowWater: 1,
       highWater: Math.max(3, proposals * 2),
+      directionQuota,
       budget,
       proposalRewrites,
       context,

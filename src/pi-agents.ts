@@ -73,6 +73,13 @@ export async function createPiContext(opts: {
           `队列需要补货：${input.needsMore}。队列已满：${input.mustStopProducing}。`,
           `已经用过的方向（不要再交）：${JSON.stringify(input.takenDirections)}`,
         ];
+        if (input.deferredDirections.length > 0) {
+          parts.push(
+            `因同一信号源并发额度已满而暂缓的方向（不算用过，名额空出后再交）：${JSON.stringify(
+              input.deferredDirections,
+            )}`,
+          );
+        }
         if (directionMap) parts.push(directionMap);
         parts.push(
           "先读各条记录的 logPath、最好方案的 solutionDir（或 best/）和 queue/，再按系统提示做诊断、出实验。",
