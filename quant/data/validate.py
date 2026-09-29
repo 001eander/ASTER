@@ -45,7 +45,7 @@ from typing import Literal
 
 import polars as pl
 
-from quant.data import cache
+from quant.data import cache, index_members
 from quant.data.limit import (
     BJ_LIMIT_RATIO,
     CYB_LIMIT_RATIO,
@@ -57,6 +57,9 @@ from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
     INDUSTRY,
+    INDEX_DRIFT_CHECK,
+    INDEX_MEMBERS,
+    INDEX_WEIGHTS,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
     SchemaError,
@@ -165,18 +168,23 @@ def _read_table(
     issues: list[ValidationIssue],
     *,
     required: bool = True,
+    warn_missing: bool = True,
 ) -> pl.DataFrame:
-    """读一个基础 parquet 表；缺失 / 读不动 / schema 不符只记账。"""
+    """读一个基础 parquet 表；缺失 / 读不动 / schema 不符只记账。
+
+    ``warn_missing=False`` 时文件缺失静默返回空表（用于尚未启用的可选数据集）。
+    """
     path = data_dir / filename
     empty = pl.DataFrame(schema=schema)
     if not path.exists():
-        _add(
-            issues,
-            "error" if required else "warning",
-            f"{name}_missing",
-            f"缺少 {name} 文件：{path}",
-            0,
-        )
+        if warn_missing:
+            _add(
+                issues,
+                "error" if required else "warning",
+                f"{name}_missing",
+                f"缺少 {name} 文件：{path}",
+                0,
+            )
         return empty
     try:
         raw = pl.read_parquet(path)
@@ -723,6 +731,171 @@ def _check_adjustments(
 
 
 # ---------------------------------------------------------------------------
+# 指数成分与权重
+# ---------------------------------------------------------------------------
+
+
+def _check_index_members(
+    issues: list[ValidationIssue],
+    members: pl.DataFrame,
+    open_days: pl.DataFrame,
+) -> None:
+    """成分表：重复键、成分切换日是否落在定期调样生效日、单票成员区间是否连续。"""
+    if members.height == 0:
+        return
+
+    duplicated = int(
+        members.select(["date", "instrument", "index_code"]).is_duplicated().sum()
+    )
+    if duplicated:
+        _add(
+            issues,
+            "error",
+            "index_members_duplicate_key",
+            f"指数成分表存在重复的 (date, instrument, index_code)：{duplicated} 行",
+            duplicated,
+        )
+        members = members.unique(
+            subset=["date", "instrument", "index_code"], keep="last"
+        )
+
+    opens = sorted(set(open_days["date"].to_list())) if open_days.height else []
+    if not opens:
+        return
+
+    # 成分集合发生变化的日子应落在定期调样生效日（半年一次）。
+    for code in members["index_code"].unique().sort().to_list():
+        sub = members.filter(pl.col("index_code") == code)
+        if sub.height == 0:
+            continue
+        signature = (
+            sub.group_by("date")
+            .agg(pl.col("instrument").sort().alias("_members"))
+            .sort("date")
+            .with_columns(pl.col("_members").shift(1).alias("_prev"))
+        )
+        changed = signature.filter(
+            pl.col("_prev").is_null() | (pl.col("_members") != pl.col("_prev"))
+        ).sort("date")
+        # 首个快照日是该指数建库起点，不算异常切换。
+        change_dates = changed["date"].to_list()[1:]
+        if not change_dates:
+            continue
+        scheduled = set(
+            index_members.rebalance_effective_dates(
+                min(change_dates), max(change_dates), opens
+            )
+        )
+        unexpected = [day for day in change_dates if day not in scheduled]
+        if unexpected:
+            _add(
+                issues,
+                "warning",
+                "index_member_change_off_schedule",
+                f"{code} 有 {len(unexpected)} 次成分切换不在定期调样窗口"
+                f"（含临时调样或快照生效日错位）：{unexpected[:MAX_EXAMPLES]}",
+                len(unexpected),
+            )
+
+    # 单票成员区间应连续，出现空档说明展开漏日。
+    ordinals = pl.DataFrame(
+        {"date": opens, "_ord": list(range(len(opens)))}
+    ).cast({"date": pl.Date, "_ord": pl.Int64})
+    annotated = (
+        members.join(ordinals, on="date", how="left")
+        .sort(["index_code", "instrument", "date"])
+        .with_columns(
+            (pl.col("_ord") - pl.col("_ord").shift(1).over(["index_code", "instrument"]))
+            .alias("_ord_gap")
+        )
+    )
+    holes = annotated.filter(pl.col("_ord_gap") > 1)
+    if holes.height:
+        _add(
+            issues,
+            "warning",
+            "index_member_hole",
+            f"{holes.height} 处成分区间存在开市日空档（疑似展开漏日）："
+            f"{_examples(holes, ('index_code', 'instrument', 'date'))}",
+            holes.height,
+        )
+
+
+def _check_index_weights(
+    issues: list[ValidationIssue],
+    weights: pl.DataFrame,
+) -> None:
+    """权重表：重复键与同一指数同一日权重和的合理区间。"""
+    if weights.height == 0:
+        return
+
+    duplicated = int(
+        weights.select(["date", "instrument", "index_code"]).is_duplicated().sum()
+    )
+    if duplicated:
+        _add(
+            issues,
+            "error",
+            "index_weights_duplicate_key",
+            f"指数权重表存在重复的 (date, instrument, index_code)：{duplicated} 行",
+            duplicated,
+        )
+        weights = weights.unique(
+            subset=["date", "instrument", "index_code"], keep="last"
+        )
+
+    sums = weights.group_by(["index_code", "date"]).agg(
+        pl.col("weight").sum().alias("_sum")
+    )
+    bad = sums.filter(
+        (pl.col("_sum") < index_members.WEIGHT_SUM_MIN)
+        | (pl.col("_sum") > index_members.WEIGHT_SUM_MAX)
+    ).sort("_sum")
+    if bad.height:
+        worst = bad.row(0, named=True)
+        _add(
+            issues,
+            "error",
+            "index_weight_sum_out_of_range",
+            f"{bad.height} 个 (指数, 日期) 的权重和不在 "
+            f"[{index_members.WEIGHT_SUM_MIN}, {index_members.WEIGHT_SUM_MAX}]，"
+            f"最差 {worst['index_code']}@{worst['date']} = {worst['_sum']:.4f}",
+            bad.height,
+        )
+
+
+def _check_index_drift(
+    issues: list[ValidationIssue],
+    drift: pl.DataFrame,
+) -> None:
+    """漂移权重与次月官方权重的对拍误差，中位数超阈告警。"""
+    if drift.height == 0:
+        return
+    stats = (
+        drift.group_by(["index_code", "anchor_date"])
+        .agg(
+            pl.col("abs_deviation").median().alias("_median"),
+            pl.col("abs_deviation").max().alias("_max"),
+            pl.len().alias("_n"),
+        )
+        .sort("_median", descending=True)
+    )
+    bad = stats.filter(pl.col("_median") > index_members.DRIFT_DEVIATION_WARN)
+    if bad.height:
+        worst = bad.row(0, named=True)
+        _add(
+            issues,
+            "warning",
+            "index_weight_drift_deviation",
+            f"{bad.height} 个锚日的漂移-官方权重绝对偏差中位数超过 "
+            f"{index_members.DRIFT_DEVIATION_WARN:g}，最差 {worst['index_code']}"
+            f"@{worst['anchor_date']} 中位 {worst['_median']:.2e} / 最大 {worst['_max']:.2e}"
+            f"（{worst['_n']} 票）",
+            bad.height,
+        )
+
+
+# ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
 
@@ -765,6 +938,34 @@ def validate(
         data_dir, cache.INDUSTRY_FILE, INDUSTRY, "industry", issues
     )
     _check_industry_coverage(issues, instruments, industry)
+    # 指数成分/权重为可选数据集：未启用时静默跳过，不产生告警。
+    index_member_rows = _read_table(
+        data_dir,
+        index_members.INDEX_MEMBERS_FILE,
+        INDEX_MEMBERS,
+        "index_members",
+        issues,
+        required=False,
+        warn_missing=False,
+    )
+    index_weight_rows = _read_table(
+        data_dir,
+        index_members.INDEX_WEIGHTS_FILE,
+        INDEX_WEIGHTS,
+        "index_weights",
+        issues,
+        required=False,
+        warn_missing=False,
+    )
+    index_drift_rows = _read_table(
+        data_dir,
+        index_members.INDEX_DRIFT_CHECK_FILE,
+        INDEX_DRIFT_CHECK,
+        "index_weight_drift",
+        issues,
+        required=False,
+        warn_missing=False,
+    )
 
     has_calendar = calendar.height > 0
     if lookback_days is None:
@@ -801,6 +1002,10 @@ def validate(
         win = annotated.filter(pl.col("date") <= data_end)
     else:
         win = annotated.head(0)
+
+    _check_index_members(issues, index_member_rows, open_days)
+    _check_index_weights(issues, index_weight_rows)
+    _check_index_drift(issues, index_drift_rows)
 
     if win.height == 0:
         _add(

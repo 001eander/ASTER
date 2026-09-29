@@ -150,6 +150,50 @@ INDUSTRY = pl.Schema(
     }
 )
 
+#: 指数成分快照表（官方成分名单的原始落地形态）。
+#: ``snapshot_date`` 为该名单的生效日（首个按新名单交易的交易日），
+#: 单只指数同一生效日对应一份完整成分名单，展开到日频由 index_members 负责。
+INDEX_MEMBER_SNAPSHOTS = pl.Schema(
+    {
+        "snapshot_date": pl.Date,
+        "instrument": pl.String,
+        "index_code": pl.String,
+    }
+)
+
+#: 指数成分日频 PIT 成员表：两个调样生效日之间成分名单保持不变。
+INDEX_MEMBERS = pl.Schema(
+    {
+        "date": pl.Date,
+        "instrument": pl.String,
+        "index_code": pl.String,
+    }
+)
+
+#: 指数权重表。``weight`` 为小数口径（0.0123 = 1.23%），
+#: 同一 (index_code, date) 的权重和应约为 1。该表既是官方锚的落盘形态，
+#: 也是锚间漂移后的日频权重。
+INDEX_WEIGHTS = pl.Schema(
+    {
+        "date": pl.Date,
+        "instrument": pl.String,
+        "index_code": pl.String,
+        "weight": pl.Float64,
+    }
+)
+
+#: 官方锚到达时，漂移权重与官方权重的对拍明细（每个锚日一票一行）。
+INDEX_DRIFT_CHECK = pl.Schema(
+    {
+        "anchor_date": pl.Date,
+        "index_code": pl.String,
+        "instrument": pl.String,
+        "drift_weight": pl.Float64,
+        "official_weight": pl.Float64,
+        "abs_deviation": pl.Float64,
+    }
+)
+
 
 class SchemaError(ValueError):
     """数据表与约定 schema 不符。"""
@@ -200,3 +244,25 @@ def check_industry(df: pl.DataFrame, *, name: str = "industry") -> None:
         raise SchemaError(f"{name} 存在重复的 (instrument, effective_from)")
     if not df.equals(df.sort(key)):
         raise SchemaError(f"{name} 未按 (instrument, effective_from) 排序")
+
+
+def check_index_members(df: pl.DataFrame, *, name: str = "index_members") -> None:
+    """成分表的额外约定：按 (index_code, date, instrument) 排序，同键不重复。"""
+    check_schema(df, INDEX_MEMBERS, name=name)
+    key = ["date", "instrument", "index_code"]
+    if df.select(key).is_duplicated().any():
+        raise SchemaError(f"{name} 存在重复的 (date, instrument, index_code)")
+    order = ["index_code", "date", "instrument"]
+    if not df.equals(df.sort(order)):
+        raise SchemaError(f"{name} 未按 (index_code, date, instrument) 排序")
+
+
+def check_index_weights(df: pl.DataFrame, *, name: str = "index_weights") -> None:
+    """权重表的额外约定：按 (index_code, date, instrument) 排序，同键不重复。"""
+    check_schema(df, INDEX_WEIGHTS, name=name)
+    key = ["date", "instrument", "index_code"]
+    if df.select(key).is_duplicated().any():
+        raise SchemaError(f"{name} 存在重复的 (date, instrument, index_code)")
+    order = ["index_code", "date", "instrument"]
+    if not df.equals(df.sort(order)):
+        raise SchemaError(f"{name} 未按 (index_code, date, instrument) 排序")

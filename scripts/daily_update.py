@@ -52,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from quant.data.cache import (  # noqa: E402
     CALENDAR_FILE,
+    INDUSTRY_REFRESH_DAYS,
     MANIFEST_FILE,
     FetchReport,
     IndexBarsReport,
@@ -63,6 +64,10 @@ from quant.data.cache import (  # noqa: E402
     update_daily,
     update_index_bars,
     update_industry,
+)
+from quant.data.index_members import (  # noqa: E402
+    AnchorSource,
+    run_index_update,
 )
 from quant.data.limit import (  # noqa: E402
     ST_INTERVALS,
@@ -90,8 +95,6 @@ BARS_DIRNAME: str = "bars"
 ST_INTERVALS_FILENAME: str = "st_intervals.parquet"
 #: 公司行为每次覆盖重抓的回溯窗口（天）。公司行为会修订历史，故整段重抓。
 CA_LOOKBACK_DAYS: int = 90
-#: 行业归属全量刷新间隔（天）；新上市票不受该间隔限制，缺归属即补抓。
-INDUSTRY_REFRESH_DAYS: int = 28
 #: 进度打印间隔（每处理这么多只报一次）。
 PROGRESS_EVERY: int = 100
 
@@ -108,6 +111,8 @@ class DailyUpdateResult:
     index: IndexBarsReport = field(default_factory=IndexBarsReport)
     industry: IndustryReport = field(default_factory=IndustryReport)
     limit_years: dict[int, int] = field(default_factory=dict)
+    #: 指数成分/权重阶段的统计（未抓取或未指定源时为空）。
+    index_members: dict[str, int] = field(default_factory=dict)
     latest_data_date: date | None = None
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -236,8 +241,14 @@ def run_daily_update(
     end: date,
     ca_lookback_days: int = CA_LOOKBACK_DAYS,
     progress: ProgressCallback | None = None,
+    index_source: AnchorSource | None = None,
+    index_codes: tuple[str, ...] = INDEX_CODES,
 ) -> DailyUpdateResult:
-    """执行一次每日增量更新，返回 :class:`DailyUpdateResult`。"""
+    """执行一次每日增量更新，返回 :class:`DailyUpdateResult`。
+
+    ``index_source`` 非空时追加指数成分/权重阶段：抓取官方最新成分名单与月末权重，
+    变更时增量落地并重建日频表；为空则跳过该阶段（离线/测试场景）。
+    """
     data_dir = Path(data_dir)
     timings: dict[str, float] = {}
     total_started = time.monotonic()
@@ -278,6 +289,14 @@ def run_daily_update(
     limit_counts = recompute_limits(data_dir, source, years)
     timings["limits"] = time.monotonic() - started
 
+    index_member_stats: dict[str, int] = {}
+    if index_source is not None:
+        started = time.monotonic()
+        index_member_stats = run_index_update(
+            index_source, data_dir, end=effective_end, index_codes=index_codes
+        )
+        timings["index_members"] = time.monotonic() - started
+
     timings["total"] = time.monotonic() - total_started
     return DailyUpdateResult(
         data_dir=data_dir,
@@ -288,6 +307,7 @@ def run_daily_update(
         index=index_report,
         industry=industry_report,
         limit_years=limit_counts,
+        index_members=index_member_stats,
         latest_data_date=manifest_max_bars_date(data_dir),
         timings=timings,
     )
@@ -352,6 +372,7 @@ def _print_dry_run(data_dir: Path, end: date) -> None:
     ca_start = effective - timedelta(days=CA_LOOKBACK_DAYS)
     print(f"- 公司行为：重抓 [{ca_start.isoformat()}, {effective.isoformat()}] 并合并")
     print(f"- 涨跌停：重算年份 {years}")
+    print(f"- 指数成分/权重：抓取官方最新锚 {list(INDEX_CODES)} 并重建日频表")
     print(f"- 当前缓存最新数据日：{before.isoformat() if before else '无'}")
 
 
@@ -376,6 +397,7 @@ def _print_summary(result: DailyUpdateResult) -> None:
         f"行业 {timings.get('industry', 0.0):.1f}s，"
         f"公司行为 {timings.get('ca', 0.0):.1f}s，"
         f"涨跌停 {timings.get('limits', 0.0):.1f}s，"
+        f"指数成分 {timings.get('index_members', 0.0):.1f}s，"
         f"合计 {timings.get('total', 0.0):.1f}s"
     )
     print(
@@ -393,6 +415,13 @@ def _print_summary(result: DailyUpdateResult) -> None:
     if index.failures:
         print(f"指数失败清单：{index.failures}")
     print(f"涨跌停重算：{result.limit_years}")
+    if result.index_members:
+        print(
+            f"指数成分/权重：成分 {result.index_members.get('members', 0)} 行，"
+            f"权重 {result.index_members.get('weights', 0)} 行，"
+            f"锚 {result.index_members.get('anchors', 0)} 行，"
+            f"更新指数 {result.index_members.get('updated', 0)}/{result.index_members.get('checked', 0)}"
+        )
     if bars.failures:
         sample = list(bars.failures.items())[:10]
         print(f"日线失败清单（共 {len(bars.failures)}，前 10）：{sample}")
@@ -433,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     from quant.data.source.akshare import AkshareSource  # 延迟导入，dry-run 不碰网络
+    from quant.data.source.csindex import CsindexSource
 
     started = time.monotonic()
     source = AkshareSource()
@@ -445,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
         data_dir,
         end=args.end,
         progress=_progress_printer(started),
+        index_source=CsindexSource(),
     )
     _print_summary(result)
     return 0
