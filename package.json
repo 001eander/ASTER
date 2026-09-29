@@ -1,0 +1,30 @@
+{
+  "name": "aster",
+  "version": "0.1.0",
+  "description": "ASTER 编排层：Hyra 式内循环（fork 自 hyra-pi），Context 出灵感、Proposal 写因子、Docker 沙盒评分",
+  "type": "module",
+  "bin": {
+    "aster": "./dist/cli.js"
+  },
+  "scripts": {
+    "test": "node scripts/vitest-run.mjs run",
+    "test:watch": "node scripts/vitest-run.mjs",
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "aster": "node dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@upstash/context7-pi": "^0.1.2"
+  },
+  "devDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.2.11",
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}
