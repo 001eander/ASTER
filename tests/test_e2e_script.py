@@ -393,6 +393,12 @@ def test_run_e2e_generates_orders_and_writes_artifacts(tmp_path: Path) -> None:
         assert path.exists(), f"缺少产物 {path}"
     assert pl.read_parquet(result.nav_path).height == result.metrics["trading_days"]
 
+    assert result.holdings_path is not None and result.holdings_path.exists()
+    holdings = pl.read_parquet(result.holdings_path)
+    assert set(holdings.columns) == {"date", "instrument", "weight"}
+    assert holdings.height > 0
+    assert holdings["date"].null_count() == 0
+
     report_text = result.report_path.read_text(encoding="utf-8")
     assert "## 配置" in report_text
     assert "initial_cash" in report_text
@@ -484,6 +490,20 @@ def test_run_e2e_benchmark_missing_data_raises(tmp_path: Path) -> None:
     config = replace(config, benchmark="000905")
     with pytest.raises(e2e.E2EError, match="index_bars"):
         e2e.run_e2e(config, trainer=trainer)
+
+
+def test_run_e2e_risk_report_wiring(tmp_path: Path) -> None:
+    """``--risk-report`` 接线：落 holdings.parquet 与 risk_report.md，失败不影响回测。"""
+    config, _days, trainer = _build_e2e_fixture(tmp_path, scores=None)
+    config = replace(config, risk_report=True)
+    optimizer = PortfolioOptimizer(lam=1.0, kappa=0.002, w_max=0.5, max_turnover=0.30)
+
+    result = e2e.run_e2e(config, trainer=trainer, optimizer=optimizer)
+
+    assert result.risk_report_path is not None
+    assert result.risk_report_path.exists()
+    text = result.risk_report_path.read_text(encoding="utf-8")
+    assert "## 指数分布" in text
 
 
 # ---------------------------------------------------------------------------

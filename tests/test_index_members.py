@@ -25,6 +25,7 @@ from quant.data.index_members import (
     read_anchor_weights,
     read_drift_check,
     read_index_members,
+    read_index_weights,
     read_snapshots,
     rebalance_effective_dates,
     run_index_update,
@@ -356,7 +357,16 @@ def test_build_daily_tables_end_to_end(tmp_path: Path) -> None:
     assert weights.height == 3
     derived = pl.read_parquet(tmp_path / "index_weights.parquet")
     assert set(derived["date"].unique().to_list()) == set(OPEN)
+    derived_via_reader = read_index_weights(tmp_path)
+    assert derived_via_reader.height == derived.height
+    assert derived_via_reader.columns == list(INDEX_WEIGHTS.keys())
     assert read_drift_check(tmp_path).height == 1
+
+
+def test_read_index_weights_missing_file_returns_empty(tmp_path: Path) -> None:
+    out = read_index_weights(tmp_path)
+    assert out.height == 0
+    assert out.columns == list(INDEX_WEIGHTS.keys())
 
 
 class _FakeAnchorSource:
