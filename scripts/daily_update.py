@@ -12,6 +12,9 @@ T 日收盘后跑一次，把本地缓存推进到最新交易日：
    的 ``prev_close`` 有前一年最后一条收盘价可依；
 4. 打印各阶段耗时、ok/failed/empty 计数、失败清单与最新数据日期。
 
+指数行情（issue #67）在日线增量之后单独刷新 4 只基准指数（``INDEX_CODES``）到
+``effective_end``，与个股行情相互独立，失败只记账不中止其余阶段。
+
 非交易日 ``end`` 也能正常处理：提示「最近开市日为 X」，把数据推进到该日即可。
 
 用法::
@@ -48,11 +51,13 @@ from quant.data.cache import (  # noqa: E402
     CALENDAR_FILE,
     MANIFEST_FILE,
     FetchReport,
+    IndexBarsReport,
     ProgressCallback,
     load_bars,
     load_instruments,
     update_corporate_actions,
     update_daily,
+    update_index_bars,
 )
 from quant.data.limit import (  # noqa: E402
     ST_INTERVALS,
@@ -61,6 +66,7 @@ from quant.data.limit import (  # noqa: E402
 )
 from quant.data.schema import (  # noqa: E402
     DAILY_BARS,
+    INDEX_CODES,
     check_daily_bars,
 )
 from quant.data.source.base import DataSource  # noqa: E402
@@ -92,6 +98,7 @@ class DailyUpdateResult:
     effective_end: date
     bars: FetchReport
     ca: FetchReport
+    index: IndexBarsReport = field(default_factory=IndexBarsReport)
     limit_years: dict[int, int] = field(default_factory=dict)
     latest_data_date: date | None = None
     timings: dict[str, float] = field(default_factory=dict)
@@ -237,6 +244,11 @@ def run_daily_update(
     # update_daily 已刷新日历，据此定位 <= end 的最近开市日。
     effective_end = latest_open_date(data_dir, end) or end
 
+    # 基准指数日线增量（issue #67）：4 只指数刷新到 effective_end。
+    started = time.monotonic()
+    index_report = update_index_bars(source, data_dir, end=effective_end)
+    timings["index"] = time.monotonic() - started
+
     started = time.monotonic()
     ca_report = update_corporate_actions(
         source,
@@ -258,6 +270,7 @@ def run_daily_update(
         effective_end=effective_end,
         bars=bars_report,
         ca=ca_report,
+        index=index_report,
         limit_years=limit_counts,
         latest_data_date=manifest_max_bars_date(data_dir),
         timings=timings,
@@ -316,6 +329,7 @@ def _print_dry_run(data_dir: Path, end: date) -> None:
     if latest_open is not None and latest_open != end:
         print(f"提示：{end.isoformat()} 非开市日，最近开市日为 {latest_open.isoformat()}")
     print(f"- 增量抓日线 + 刷新 calendar/instruments（推进到 {effective.isoformat()}）")
+    print(f"- 基准指数日线：{list(INDEX_CODES)} 刷新到 {effective.isoformat()}")
     ca_start = effective - timedelta(days=CA_LOOKBACK_DAYS)
     print(f"- 公司行为：重抓 [{ca_start.isoformat()}, {effective.isoformat()}] 并合并")
     print(f"- 涨跌停：重算年份 {years}")
@@ -339,6 +353,7 @@ def _print_summary(result: DailyUpdateResult) -> None:
     )
     print(
         f"阶段耗时：日线 {timings.get('bars', 0.0):.1f}s，"
+        f"指数 {timings.get('index', 0.0):.1f}s，"
         f"公司行为 {timings.get('ca', 0.0):.1f}s，"
         f"涨跌停 {timings.get('limits', 0.0):.1f}s，"
         f"合计 {timings.get('total', 0.0):.1f}s"
@@ -350,6 +365,13 @@ def _print_summary(result: DailyUpdateResult) -> None:
     print(
         f"公司行为：ok={ca.ca_ok} failed={ca.ca_failed} empty={ca.ca_empty}"
     )
+    index = result.index
+    print(
+        f"基准指数：ok={index.ok} failed={index.failed} "
+        f"empty={index.empty} skipped={index.skipped} 表内 {index.rows} 行"
+    )
+    if index.failures:
+        print(f"指数失败清单：{index.failures}")
     print(f"涨跌停重算：{result.limit_years}")
     if bars.failures:
         sample = list(bars.failures.items())[:10]

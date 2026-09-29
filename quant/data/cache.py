@@ -55,6 +55,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Protocol
 
 import polars as pl
 
@@ -62,9 +63,12 @@ from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
     HISTORY_START,
+    INDEX_BARS,
+    INDEX_CODES,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
     check_daily_bars,
+    check_index_bars,
     check_schema,
     normalize_instrument,
 )
@@ -84,6 +88,8 @@ CALENDAR_FILE: str = "calendar.parquet"
 INSTRUMENTS_FILE: str = "instruments.parquet"
 CORPORATE_ACTIONS_FILE: str = "corporate_actions.parquet"
 BARS_DIR: str = "bars"
+#: 基准指数日线单文件（issue #67），schema 见 ``schema.INDEX_BARS``。
+INDEX_BARS_FILE: str = "index_bars.parquet"
 MANIFEST_FILE: str = "_manifest.json"
 
 #: 公司行为按票分批抓取的批大小，用于控制账本写入频率。
@@ -133,6 +139,36 @@ class FetchReport:
     def total(self) -> int:
         """日线处理过的票数（含跳过）。"""
         return self.ok + self.failed + self.empty + self.skipped
+
+
+@dataclass
+class IndexBarsReport:
+    """一次指数日线增量的结果统计（issue #67），失败只记账不抛异常。"""
+
+    ok: int = 0
+    failed: int = 0
+    empty: int = 0
+    skipped: int = 0
+    #: 本次新增（去重后计入表内的）行数。
+    rows: int = 0
+    #: 指数代码 -> 错误信息。
+    failures: dict[str, str] = field(default_factory=dict)
+    #: 指数代码 -> 更新后的最新日期（ISO 字符串）。
+    last_dates: dict[str, str] = field(default_factory=dict)
+    elapsed_seconds: float = 0.0
+
+    @property
+    def total(self) -> int:
+        return self.ok + self.failed + self.empty + self.skipped
+
+
+class _IndexSource(Protocol):
+    """指数日线来源。``AkshareSource`` 结构性满足，测试可注入假实现。"""
+
+    def index_bars(
+        self, index_codes: list[str], start: date, end: date
+    ) -> pl.DataFrame:
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +279,44 @@ def _normalize_actions(df: pl.DataFrame) -> pl.DataFrame:
         .cast(CORPORATE_ACTIONS)
         .sort(["instrument", "date"])
     )
+
+
+def _normalize_index_bars(df: pl.DataFrame) -> pl.DataFrame:
+    if df.height == 0:
+        return _empty(INDEX_BARS)
+    return (
+        df.select(list(INDEX_BARS.keys()))
+        .cast(INDEX_BARS)
+        .sort(["index_code", "date"])
+    )
+
+
+def _index_bars_path(data_dir: Path) -> Path:
+    return data_dir / INDEX_BARS_FILE
+
+
+def _merge_index_bars(data_dir: Path, new_bars: pl.DataFrame) -> int:
+    """把新指数行情并入单文件：concat → unique(keep=last) → sort，返回表内总行数。
+
+    ``keep="last"`` 让新抓到的行覆盖旧行，同日重复跑幂等。
+    """
+    if new_bars.height == 0:
+        return 0
+    new_bars = _normalize_index_bars(new_bars)
+    path = _index_bars_path(data_dir)
+    if path.exists():
+        new_bars = pl.concat(
+            [pl.read_parquet(path), new_bars], how="vertical_relaxed"
+        )
+    out = (
+        new_bars.select(list(INDEX_BARS.keys()))
+        .cast(INDEX_BARS)
+        .unique(subset=["index_code", "date"], keep="last")
+        .sort(["index_code", "date"])
+    )
+    check_index_bars(out)
+    _atomic_write_parquet(path, out)
+    return out.height
 
 
 def _merge_daily_bars(data_dir: Path, new_bars: pl.DataFrame) -> None:
@@ -862,15 +936,126 @@ def load_corporate_actions(
     return out
 
 
+# ---------------------------------------------------------------------------
+# 指数日线（issue #67）
+# ---------------------------------------------------------------------------
+
+
+def _index_last_dates(data_dir: Path) -> dict[str, date]:
+    """读 ``index_bars.parquet`` 里每只指数的最新日期，缺失或读不动返回空表。"""
+    path = _index_bars_path(data_dir)
+    if not path.exists():
+        return {}
+    try:
+        df = pl.read_parquet(path, columns=["index_code", "date"])
+    except Exception as exc:  # noqa: BLE001 - 损坏文件按全量重抓处理
+        logger.warning("index_bars.parquet 读取失败，按全量重抓：%s", exc)
+        return {}
+    return {
+        str(row["index_code"]): row["date"]
+        for row in df.group_by("index_code")
+        .agg(pl.col("date").max())
+        .iter_rows(named=True)
+    }
+
+
+def update_index_bars(
+    source: _IndexSource,
+    data_dir: Path,
+    *,
+    end: date,
+    start: date = HISTORY_START,
+    index_codes: tuple[str, ...] = INDEX_CODES,
+) -> IndexBarsReport:
+    """增量刷新基准指数日线到 ``end``（issue #67）。
+
+    每只指数从缓存里的最新日期（含当日，用于覆盖修订）抓到 ``end``；缓存无该指数
+    时从 ``start`` 全抓。合并按 ``(index_code, date)`` 去重 ``keep="last"``，同日重复
+    跑幂等。单只失败 log+记账，不影响其余指数。
+    """
+    started = time.monotonic()
+    data_dir = Path(data_dir)
+    _ensure_data_dir(data_dir)
+    report = IndexBarsReport()
+    last_dates = _index_last_dates(data_dir)
+    frames: list[pl.DataFrame] = []
+
+    for index_code in index_codes:
+        last = last_dates.get(index_code)
+        if last is not None and last >= end:
+            report.skipped += 1
+            report.last_dates[index_code] = last.isoformat()
+            continue
+        fetch_start = last if last is not None else start
+        try:
+            frame = source.index_bars([index_code], fetch_start, end)
+        except Exception as exc:  # noqa: BLE001 - 单只失败不影响其余
+            report.failed += 1
+            report.failures[index_code] = str(exc)[:500]
+            logger.warning("抓取指数 %s 失败：%s", index_code, exc)
+            continue
+        frame = _normalize_index_bars(frame) if frame is not None else _empty(INDEX_BARS)
+        if frame.height == 0:
+            report.empty += 1
+            if last is not None:
+                report.last_dates[index_code] = last.isoformat()
+            continue
+        frames.append(frame)
+        report.ok += 1
+        report.last_dates[index_code] = frame["date"].max().isoformat()
+
+    if frames:
+        report.rows = _merge_index_bars(
+            data_dir, pl.concat(frames, how="vertical_relaxed")
+        )
+    elif _index_bars_path(data_dir).exists():
+        report.rows = pl.read_parquet(_index_bars_path(data_dir)).height
+
+    report.elapsed_seconds = time.monotonic() - started
+    return report
+
+
+def load_index_bars(
+    data_dir: Path,
+    *,
+    index_codes: list[str] | None = None,
+    start: date | None = None,
+    end: date | None = None,
+) -> pl.DataFrame:
+    """读取指数日线，输出过 ``check_index_bars``；文件缺失返回空表。"""
+    path = _index_bars_path(Path(data_dir))
+    if not path.exists():
+        return _empty(INDEX_BARS)
+    df = pl.read_parquet(path)
+    if index_codes is not None:
+        df = df.filter(pl.col("index_code").is_in(list(index_codes)))
+    if start is not None:
+        df = df.filter(pl.col("date") >= start)
+    if end is not None:
+        df = df.filter(pl.col("date") <= end)
+    out = (
+        df.select(list(INDEX_BARS.keys()))
+        .cast(INDEX_BARS)
+        .unique(subset=["index_code", "date"], keep="last")
+        .sort(["index_code", "date"])
+    )
+    check_index_bars(out)
+    return out
+
+
 __all__ = [
     "DEFAULT_START",
     "FetchReport",
+    "INDEX_BARS_FILE",
+    "IndexBarsReport",
     "ProgressCallback",
     "fetch_full",
     "load_bars",
     "load_calendar",
     "load_corporate_actions",
+    "load_index_bars",
     "load_instruments",
     "update_corporate_actions",
     "update_daily",
+    "update_index_bars",
 ]
