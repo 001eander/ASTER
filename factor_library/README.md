@@ -33,5 +33,6 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 | `ma_bias_20` | 均线乖离 | 收盘对 20 日均线偏离，过大则回归 | 20 | close, adjfactor |
 | `range_pct` | 其他 | 日内相对振幅的 10 日均值，度量震荡强度 | 10 | high, low, close |
 | `vwap_bias` | 其他 | 收盘对当日 VWAP 的偏离，度量日内资金强弱 | 无 | close, vwap |
+| `vol_ratio_5_20_neg` | 量能 | 5/20 日均量比取负，缩量做多（M2 内循环冒烟首个入库因子） | 5 / 20 | volume |
 
 评估脚本见 `scripts/eval_baseline_factors.py`，测试见 `tests/test_baseline_factors.py`。
