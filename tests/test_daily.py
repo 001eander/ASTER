@@ -1,8 +1,8 @@
 """``quant.daily`` 单元测试：虚拟账户持久化 / 回录、跑批端到端、降级与订单 diff。
 
 全部用例用合成行情 + 假 trainer，不触网、不做真实训练。数据缓存写到 ``tmp_path``，
-形态与 ``data/`` 契约一致（calendar / instruments / bars / corporate_actions），
-以便跑批前的 :func:`quant.data.validate.validate` 正常通过。
+形态与 ``data/`` 契约一致（calendar / instruments / bars / corporate_actions /
+industry），以便跑批前的 :func:`quant.data.validate.validate` 正常通过。
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import pytest
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    INDUSTRY,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
 )
@@ -115,6 +116,19 @@ def _write_data_dir(
     pl.DataFrame(schema=CORPORATE_ACTIONS).write_parquet(
         data_dir / "corporate_actions.parquet"
     )
+    # 行业归属（issue #65）：全量覆盖，跑批前的 validate 覆盖率检查才能通过。
+    pl.DataFrame(
+        [
+            {
+                "instrument": instrument,
+                "industry_l1": "信息技术",
+                "industry_l2": "半导体",
+                "effective_from": date(2020, 1, 1),
+            }
+            for instrument in instruments
+        ],
+        schema=INDUSTRY,
+    ).write_parquet(data_dir / "industry.parquet")
     bars = _bars(instruments, days)
     for year in sorted(set(bars["date"].dt.year().to_list())):
         chunk = bars.filter(pl.col("date").dt.year() == year)

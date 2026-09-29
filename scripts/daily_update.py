@@ -7,10 +7,13 @@ T 日收盘后跑一次，把本地缓存推进到最新交易日：
 2. :func:`quant.data.cache.update_corporate_actions` 覆盖重抓近
    ``CA_LOOKBACK_DAYS`` 天窗口并合并进 ``corporate_actions.parquet``
    （公司行为会修订历史，故窗口内整段重抓，merge 按 ``(date, instrument)`` 去重）；
-3. 对受影响的年份文件重算涨跌停：把该年文件连同**前一年**一起 ``load_bars``
+3. :func:`quant.data.cache.update_industry` 刷新 ``industry.parquet``（东财行业，
+   issue #65）：距上次全量 >= ``INDUSTRY_REFRESH_DAYS`` 天或出现无归属的新上市票时
+   整表抓取，按抓取日写成一份新快照；
+4. 对受影响的年份文件重算涨跌停：把该年文件连同**前一年**一起 ``load_bars``
    再 :func:`quant.data.limit.compute_limits`，写回时只写受影响年份，保证跨年首行
    的 ``prev_close`` 有前一年最后一条收盘价可依；
-4. 打印各阶段耗时、ok/failed/empty 计数、失败清单与最新数据日期。
+5. 打印各阶段耗时、ok/failed/empty 计数、失败清单与最新数据日期。
 
 指数行情（issue #67）在日线增量之后单独刷新 4 只基准指数（``INDEX_CODES``）到
 ``effective_end``，与个股行情相互独立，失败只记账不中止其余阶段。
@@ -52,12 +55,14 @@ from quant.data.cache import (  # noqa: E402
     MANIFEST_FILE,
     FetchReport,
     IndexBarsReport,
+    IndustryReport,
     ProgressCallback,
     load_bars,
     load_instruments,
     update_corporate_actions,
     update_daily,
     update_index_bars,
+    update_industry,
 )
 from quant.data.limit import (  # noqa: E402
     ST_INTERVALS,
@@ -85,6 +90,8 @@ BARS_DIRNAME: str = "bars"
 ST_INTERVALS_FILENAME: str = "st_intervals.parquet"
 #: 公司行为每次覆盖重抓的回溯窗口（天）。公司行为会修订历史，故整段重抓。
 CA_LOOKBACK_DAYS: int = 90
+#: 行业归属全量刷新间隔（天）；新上市票不受该间隔限制，缺归属即补抓。
+INDUSTRY_REFRESH_DAYS: int = 28
 #: 进度打印间隔（每处理这么多只报一次）。
 PROGRESS_EVERY: int = 100
 
@@ -99,6 +106,7 @@ class DailyUpdateResult:
     bars: FetchReport
     ca: FetchReport
     index: IndexBarsReport = field(default_factory=IndexBarsReport)
+    industry: IndustryReport = field(default_factory=IndustryReport)
     limit_years: dict[int, int] = field(default_factory=dict)
     latest_data_date: date | None = None
     timings: dict[str, float] = field(default_factory=dict)
@@ -249,6 +257,13 @@ def run_daily_update(
     index_report = update_index_bars(source, data_dir, end=effective_end)
     timings["index"] = time.monotonic() - started
 
+    # 行业归属刷新（issue #65）：月度全量 + 新上市票补归属，两者共用整表抓取。
+    started = time.monotonic()
+    industry_report = update_industry(
+        source, data_dir, today=effective_end, refresh_days=INDUSTRY_REFRESH_DAYS
+    )
+    timings["industry"] = time.monotonic() - started
+
     started = time.monotonic()
     ca_report = update_corporate_actions(
         source,
@@ -271,6 +286,7 @@ def run_daily_update(
         bars=bars_report,
         ca=ca_report,
         index=index_report,
+        industry=industry_report,
         limit_years=limit_counts,
         latest_data_date=manifest_max_bars_date(data_dir),
         timings=timings,
@@ -330,6 +346,9 @@ def _print_dry_run(data_dir: Path, end: date) -> None:
         print(f"提示：{end.isoformat()} 非开市日，最近开市日为 {latest_open.isoformat()}")
     print(f"- 增量抓日线 + 刷新 calendar/instruments（推进到 {effective.isoformat()}）")
     print(f"- 基准指数日线：{list(INDEX_CODES)} 刷新到 {effective.isoformat()}")
+    print(
+        f"- 东财行业归属：距上次全量 >= {INDUSTRY_REFRESH_DAYS} 天或缺归属时整表刷新"
+    )
     ca_start = effective - timedelta(days=CA_LOOKBACK_DAYS)
     print(f"- 公司行为：重抓 [{ca_start.isoformat()}, {effective.isoformat()}] 并合并")
     print(f"- 涨跌停：重算年份 {years}")
@@ -354,6 +373,7 @@ def _print_summary(result: DailyUpdateResult) -> None:
     print(
         f"阶段耗时：日线 {timings.get('bars', 0.0):.1f}s，"
         f"指数 {timings.get('index', 0.0):.1f}s，"
+        f"行业 {timings.get('industry', 0.0):.1f}s，"
         f"公司行为 {timings.get('ca', 0.0):.1f}s，"
         f"涨跌停 {timings.get('limits', 0.0):.1f}s，"
         f"合计 {timings.get('total', 0.0):.1f}s"
@@ -379,6 +399,20 @@ def _print_summary(result: DailyUpdateResult) -> None:
     if ca.ca_failures:
         sample = list(ca.ca_failures.items())[:10]
         print(f"公司行为失败清单（共 {len(ca.ca_failures)}，前 10）：{sample}")
+    industry = result.industry
+    if industry.refreshed:
+        print(
+            f"行业归属：已刷新（快照日 {industry.effective_from}，表内 "
+            f"{industry.rows} 行 / {industry.instruments} 只，"
+            f"未退市覆盖率 {industry.coverage:.2%}，缺 {industry.missing} 只）"
+        )
+    elif industry.skipped:
+        print(
+            f"行业归属：未到刷新间隔，跳过（表内 {industry.rows} 行，"
+            f"未退市覆盖率 {industry.coverage:.2%}）"
+        )
+    if industry.failures:
+        print(f"行业归属失败：{industry.failures}")
 
 
 def main(argv: list[str] | None = None) -> int:

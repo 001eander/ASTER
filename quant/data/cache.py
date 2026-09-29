@@ -6,6 +6,7 @@
       calendar.parquet           # TRADE_CALENDAR，全量刷新
       instruments.parquet        # INSTRUMENT_INFO，全量刷新
       corporate_actions.parquet  # CORPORATE_ACTIONS，全量刷新
+      industry.parquet           # INDUSTRY，按抓取日落快照（issue #65）
       bars/YYYY.parquet          # 每自然年一个文件，schema.DAILY_BARS，按 (instrument, date) 排序
       _manifest.json             # 抓取账本
 
@@ -65,10 +66,12 @@ from quant.data.schema import (
     HISTORY_START,
     INDEX_BARS,
     INDEX_CODES,
+    INDUSTRY,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
     check_daily_bars,
     check_index_bars,
+    check_industry,
     check_schema,
     normalize_instrument,
 )
@@ -90,7 +93,13 @@ CORPORATE_ACTIONS_FILE: str = "corporate_actions.parquet"
 BARS_DIR: str = "bars"
 #: 基准指数日线单文件（issue #67），schema 见 ``schema.INDEX_BARS``。
 INDEX_BARS_FILE: str = "index_bars.parquet"
+#: 行业分类单文件（issue #65），schema 见 ``schema.INDUSTRY``。
+INDUSTRY_FILE: str = "industry.parquet"
 MANIFEST_FILE: str = "_manifest.json"
+
+#: 行业归属全量刷新间隔（天）。东财行业分类调整频率低，月度刷新足够；
+#: 新上市票不受该间隔限制，每次发现缺归属就补抓。
+INDUSTRY_REFRESH_DAYS: int = 28
 
 #: 公司行为按票分批抓取的批大小，用于控制账本写入频率。
 CA_BATCH_SIZE: int = 200
@@ -168,6 +177,43 @@ class _IndexSource(Protocol):
     def index_bars(
         self, index_codes: list[str], start: date, end: date
     ) -> pl.DataFrame:
+        ...
+
+
+@dataclass
+class IndustryReport:
+    """一次行业归属刷新的结果统计（issue #65），失败只记账不抛异常。"""
+
+    #: 本次是否真的抓取并落盘。
+    refreshed: bool = False
+    #: 未到刷新间隔且无缺失票，跳过抓取。
+    skipped: bool = False
+    #: 表内总行数（含历史快照）。
+    rows: int = 0
+    #: 表内证券数。
+    instruments: int = 0
+    #: ``instruments.parquet`` 里未退市但表内没有归属的证券数。
+    missing: int = 0
+    #: 未退市证券数（覆盖率分母）。
+    active: int = 0
+    #: 本次快照的 ``effective_from``（未抓取时为空）。
+    effective_from: date | None = None
+    #: 抓取失败信息；键为 ``__snapshot__``（整表抓取失败）。
+    failures: dict[str, str] = field(default_factory=dict)
+    elapsed_seconds: float = 0.0
+
+    @property
+    def coverage(self) -> float:
+        """未退市证券的行业覆盖率；无未退市证券时返回 1.0。"""
+        if self.active <= 0:
+            return 1.0
+        return (self.active - self.missing) / self.active
+
+
+class _IndustrySource(Protocol):
+    """行业归属来源。``AkshareSource`` 结构性满足，测试可注入假实现。"""
+
+    def industry_classification(self) -> pl.DataFrame:
         ...
 
 
@@ -357,6 +403,71 @@ def _merge_corporate_actions(data_dir: Path, new_actions: pl.DataFrame) -> None:
     )
     check_schema(out, CORPORATE_ACTIONS, name="corporate_actions")
     _atomic_write_parquet(path, out)
+
+
+# ---------------------------------------------------------------------------
+# 行业归属（issue #65）
+# ---------------------------------------------------------------------------
+
+
+def _industry_path(data_dir: Path) -> Path:
+    return data_dir / INDUSTRY_FILE
+
+
+def _normalize_industry(df: pl.DataFrame) -> pl.DataFrame:
+    if df.height == 0:
+        return _empty(INDUSTRY)
+    return (
+        df.select(list(INDUSTRY.keys()))
+        .cast(INDUSTRY)
+        .unique(subset=["instrument", "effective_from"], keep="last")
+        .sort(["instrument", "effective_from"])
+    )
+
+
+def _normalize_snapshot(df: pl.DataFrame) -> pl.DataFrame:
+    """归一化数据源返回的三列行业快照，按 ``instrument`` 去重取最后一行。"""
+    schema = pl.Schema(
+        {key: INDUSTRY[key] for key in ("instrument", "industry_l1", "industry_l2")}
+    )
+    if df is None or df.height == 0:
+        return pl.DataFrame(schema=schema)
+    return (
+        df.select(list(schema.keys()))
+        .cast(schema)
+        .unique(subset=["instrument"], keep="last")
+        .sort("instrument")
+    )
+
+
+def _read_industry(data_dir: Path) -> pl.DataFrame:
+    """读取 ``industry.parquet``；缺失或损坏时返回空表并告警。"""
+    path = _industry_path(data_dir)
+    if not path.exists():
+        return _empty(INDUSTRY)
+    try:
+        return _normalize_industry(pl.read_parquet(path))
+    except Exception as exc:  # noqa: BLE001 - 损坏文件按空表处理，下次全量重抓
+        logger.warning("industry.parquet 读取失败，按空表处理：%s", exc)
+        return _empty(INDUSTRY)
+
+
+def _merge_industry(
+    data_dir: Path, existing: pl.DataFrame, new: pl.DataFrame
+) -> pl.DataFrame:
+    """把新快照并入 ``industry.parquet``：concat → unique(keep=last) → sort。"""
+    merged = (
+        pl.concat([existing, new], how="vertical_relaxed") if existing.height else new
+    )
+    out = (
+        merged.select(list(INDUSTRY.keys()))
+        .cast(INDUSTRY)
+        .unique(subset=["instrument", "effective_from"], keep="last")
+        .sort(["instrument", "effective_from"])
+    )
+    check_industry(out)
+    _atomic_write_parquet(_industry_path(data_dir), out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1043,19 +1154,153 @@ def load_index_bars(
     return out
 
 
+# ---------------------------------------------------------------------------
+# 行业归属读取与刷新（issue #65）
+# ---------------------------------------------------------------------------
+
+
+def _instrument_lists(data_dir: Path) -> tuple[list[str] | None, list[str]]:
+    """返回 ``(全部证券, 未退市证券)``；``instruments.parquet`` 缺失时返回 ``(None, [])``。"""
+    path = data_dir / INSTRUMENTS_FILE
+    if not path.exists():
+        return None, []
+    df = pl.read_parquet(path, columns=["instrument", "delist_date"])
+    return (
+        df["instrument"].to_list(),
+        df.filter(pl.col("delist_date").is_null())["instrument"].to_list(),
+    )
+
+
+def update_industry(
+    source: _IndustrySource,
+    data_dir: Path,
+    *,
+    today: date,
+    refresh_days: int = INDUSTRY_REFRESH_DAYS,
+    force: bool = False,
+) -> IndustryReport:
+    """刷新行业归属 ``industry.parquet``（东财口径，issue #65）。
+
+    东财行业接口只给当前截面，因此每次抓取都写成 ``effective_from = today`` 的一整份
+    快照；历史段由旧快照支撑，读取方取各自时点之前最近的一份（见 :func:`load_industry`）。
+
+    触发条件（满足其一即全量抓取，否则跳过）:
+
+    - 文件缺失或为空；
+    - 距最近一份快照 ``>= refresh_days`` 天（默认 28 天，月度刷新）；
+    - ``instruments.parquet`` 里未退市但表内没有归属的证券（新上市补归属）。
+
+    抓取结果按 ``instruments.parquet`` 的证券集合裁剪（东财接口含新三板 / B 股），
+    合并按 ``(instrument, effective_from)`` 去重 ``keep="last"``，同日重跑幂等。
+    抓取失败只记账不抛异常，保留原有文件。
+    """
+    started = time.monotonic()
+    data_dir = Path(data_dir)
+    _ensure_data_dir(data_dir)
+    report = IndustryReport()
+
+    existing = _read_industry(data_dir)
+    tracked, active = _instrument_lists(data_dir)
+    known = set(existing["instrument"].to_list())
+    report.active = len(active)
+    report.missing = sum(1 for instrument in active if instrument not in known)
+
+    last = existing["effective_from"].max() if existing.height else None
+    due = (
+        force
+        or existing.height == 0
+        or last is None
+        or (today - last).days >= refresh_days
+        or report.missing > 0
+    )
+    if not due:
+        report.skipped = True
+        report.rows = existing.height
+        report.instruments = existing["instrument"].n_unique()
+        report.elapsed_seconds = time.monotonic() - started
+        return report
+
+    try:
+        snapshot = source.industry_classification()
+    except Exception as exc:  # noqa: BLE001 - 失败保留原有文件
+        report.failures["__snapshot__"] = str(exc)[:500]
+        logger.warning("抓取东财行业归属失败：%s", exc)
+        report.rows = existing.height
+        report.instruments = existing["instrument"].n_unique()
+        report.elapsed_seconds = time.monotonic() - started
+        return report
+
+    snapshot = _normalize_snapshot(snapshot)
+    if tracked is not None:
+        snapshot = snapshot.filter(pl.col("instrument").is_in(tracked))
+    if snapshot.height == 0:
+        report.failures["__snapshot__"] = "东财行业接口返回空表"
+        logger.warning("东财行业接口返回空表，保留原有 industry.parquet")
+        report.rows = existing.height
+        report.instruments = existing["instrument"].n_unique()
+        report.elapsed_seconds = time.monotonic() - started
+        return report
+
+    new = snapshot.with_columns(pl.lit(today).cast(pl.Date).alias("effective_from"))
+    merged = _merge_industry(data_dir, existing, new)
+    report.refreshed = True
+    report.effective_from = today
+    report.rows = merged.height
+    report.instruments = merged["instrument"].n_unique()
+    known = set(merged["instrument"].to_list())
+    report.missing = sum(1 for instrument in active if instrument not in known)
+    report.elapsed_seconds = time.monotonic() - started
+    return report
+
+
+def load_industry(
+    data_dir: Path,
+    *,
+    as_of: date | None = None,
+    instruments: list[str] | None = None,
+) -> pl.DataFrame:
+    """读取行业归属，每只证券取 ``effective_from <= as_of`` 的最新一行。
+
+    文件缺失返回空表；``as_of`` 缺省取当前全表最新一份快照。输出过 ``check_industry``。
+    """
+    path = _industry_path(Path(data_dir))
+    if not path.exists():
+        return _empty(INDUSTRY)
+    df = _normalize_industry(pl.read_parquet(path))
+    if as_of is not None:
+        df = df.filter(pl.col("effective_from") <= as_of)
+    if instruments is not None:
+        wanted = [normalize_instrument(item) for item in instruments]
+        df = df.filter(pl.col("instrument").is_in(wanted))
+    out = (
+        df.select(list(INDUSTRY.keys()))
+        .cast(INDUSTRY)
+        .sort(["instrument", "effective_from"])
+        .unique(subset=["instrument"], keep="last", maintain_order=True)
+        .sort("instrument")
+    )
+    check_industry(out)
+    return out
+
+
 __all__ = [
     "DEFAULT_START",
     "FetchReport",
     "INDEX_BARS_FILE",
     "IndexBarsReport",
+    "INDUSTRY_FILE",
+    "INDUSTRY_REFRESH_DAYS",
+    "IndustryReport",
     "ProgressCallback",
     "fetch_full",
     "load_bars",
     "load_calendar",
     "load_corporate_actions",
     "load_index_bars",
+    "load_industry",
     "load_instruments",
     "update_corporate_actions",
     "update_daily",
     "update_index_bars",
+    "update_industry",
 ]

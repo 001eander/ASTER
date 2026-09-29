@@ -657,3 +657,96 @@ def test_sina_circuit_breaker_skips_sina_after_threshold(
     assert out.height == 8
     # 东财与新浪都被熔断：新浪底层调用停在阈值，后续票直连腾讯
     assert sina_calls["n"] == ak_source.CIRCUIT_THRESHOLD * ak_source.RETRY_TIMES
+
+
+# ---------------------------------------------------------------------------
+# industry_classification（issue #65）
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    """只实现 ``.json()`` 的假 response。"""
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
+def _industry_payload(
+    pages: int, rows: list[dict[str, object]]
+) -> dict[str, object]:
+    return {"result": {"pages": pages, "data": rows}}
+
+
+def _install_industry_pages(
+    monkeypatch: pytest.MonkeyPatch,
+    pages: dict[int, dict[str, object]],
+) -> list[int]:
+    calls: list[int] = []
+
+    def fake(url: str, params: dict[str, object] | None = None, **_kw: object) -> object:
+        page = int(str((params or {})["pageNumber"]))
+        calls.append(page)
+        if page not in pages:
+            return _FakeResponse({"result": None})
+        return _FakeResponse(pages[page])
+
+    monkeypatch.setattr(ak_source, "request_with_retry", fake)
+    return calls
+
+
+def test_industry_classification_paginates_and_maps_levels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _install_industry_pages(
+        monkeypatch,
+        {
+            1: _industry_payload(
+                2,
+                [
+                    {"SECUCODE": "600000.SH", "EM2016": "金融-银行-股份制与城商行"},
+                    {"SECUCODE": "430001.NQ", "EM2016": "信息技术-半导体"},  # 新三板
+                    {"SECUCODE": "600001.SH", "EM2016": None},  # 无归属
+                ],
+            ),
+            2: _industry_payload(
+                2,
+                [{"SECUCODE": "000001.SZ", "EM2016": "金融-银行-股份制与城商行"}],
+            ),
+        },
+    )
+
+    out = AkshareSource().industry_classification()
+
+    assert calls == [1, 2]
+    assert out.columns == ["instrument", "industry_l1", "industry_l2"]
+    assert out.rows() == [
+        ("000001.SZ", "金融", "银行"),
+        ("600000.SH", "金融", "银行"),
+    ]
+
+
+def test_industry_classification_single_segment_fills_l2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_industry_pages(
+        monkeypatch,
+        {1: _industry_payload(1, [{"SECUCODE": "600519.SH", "EM2016": "食品饮料"}])},
+    )
+
+    out = AkshareSource().industry_classification()
+
+    assert out.rows() == [("600519.SH", "食品饮料", "食品饮料")]
+
+
+def test_industry_classification_empty_returns_typed_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_industry_pages(monkeypatch, {})
+
+    out = AkshareSource().industry_classification()
+
+    assert out.height == 0
+    assert out.columns == ["instrument", "industry_l1", "industry_l2"]
