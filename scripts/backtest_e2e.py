@@ -6,6 +6,17 @@
 JSON，在 ``[start, end]`` 区间跑一次完整的 :class:`~quant.backtest.engine.BacktestEngine`
 账户回测（T+1 开盘成交、涨跌停、整手、费用、公司行为）。
 
+两条策略路径（``--strategy``，issue #71）
+----------------------------------------
+- ``stock_selection``（默认，M1 现状）：打分 top-K ∪ 当前持仓 →
+  :class:`~quant.portfolio.optimizer.PortfolioOptimizer`。
+- ``index_enhanced``：候选 = 基准成分（PIT 权重）∪ top-K ∪ 当前持仓 →
+  :class:`~quant.portfolio.enhanced.EnhancedOptimizer`，非调仓日保持持仓（权重复由
+  持仓市值自然漂移）。输入组装（基准权重 / 行业 / 流通市值 / 六风格 / 收益矩阵）
+  复用 :mod:`quant.portfolio.enhanced_inputs`，与 ``run_daily`` 指增分派同一套口径。
+  该路径额外落 ``enhanced_log.parquet``（逐日调仓状态、放松轮数、覆盖度、个股带
+  最大偏离等），并在报告中给出指增核对段。
+
 无前视的说明（关键）
 --------------------
 回测开始前对**整个加载窗口**一次性 ``predict``，再把打分按信号日 T 查表。这不构成
@@ -13,6 +24,12 @@ JSON，在 ``[start, end]`` 区间跑一次完整的 :class:`~quant.backtest.eng
 ``date <= T`` 的行情算出（因子含 rolling / shift，逐日截面 z-score 只用当日截面），
 ``predict`` 不读 ``label``。等价于「每天收盘后用当日可得数据打分」，只是把逐日调用
 合并成一次批量推理。同理，收益面板与收盘价面板都按 ``date <= T`` 切片后再喂给优化器。
+
+股票池的两套行情窗口
+--------------------
+``universe`` 非空时，因子 / 打分 / 数据集用**逐日 PIT 成员**裁剪的行情（截面 z-score
+只在池内算）；引擎撮合与估值另用「窗口内曾属于该池」的并集行情，否则调样后离池的
+持仓既卖不掉也补不到价（broker 按当日无行情判停牌）。两套窗口都不含 cutoff 之后的信息。
 
 信号函数（T 日收盘后被引擎调用，只读实时 ``Account``）
 -----------------------------------------------------
@@ -31,14 +48,21 @@ JSON，在 ``[start, end]`` 区间跑一次完整的 :class:`~quant.backtest.eng
         --initial-cash 1000000 --top-k 50 --lookback-days 250 \
         --benchmark 000905 --out-dir runs/e2e
 
+    uv run python scripts/backtest_e2e.py --strategy index_enhanced \
+        --universe zz1000 --benchmark 000852 --model-dir runs/automl/zz1000 \
+        --start 2025-01-02 --end 2026-09-28 --risk-report \
+        --out-dir runs/e2e-zz1000-enhanced
+
 落盘（``--out-dir``）:: nav.parquet / report.md / account_states.md / nav.png / holdings.parquet
 指定 ``--benchmark`` 时额外落 ``benchmark.parquet``（基准 / 超额净值与日收益序列），
 报告「绩效」表追加基准年化 / 超额年化 / 跟踪误差 / 信息比率，净值图叠加基准曲线。
 指定 ``--risk-report`` 时额外落 ``risk_report.md``（issue #69 四表，读 ``holdings.parquet``）。
+``--strategy index_enhanced`` 时额外落 ``enhanced_log.parquet``（逐日优化日志）。
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import sys
@@ -73,6 +97,19 @@ from quant.daily.pipeline import (  # noqa: E402
     diff_orders,
     discover_factors,
 )
+from quant.daily.strategy import (  # noqa: E402
+    DEFAULT_REBALANCE_FREQ,
+    DEFAULT_STRATEGY,
+    REBALANCE_FREQS,
+    STRATEGIES,
+    StrategyConfig,
+    StrategyConfigError,
+    build_enhanced_optimizer,
+    build_stock_optimizer,
+    is_rebalance_day,
+    load_strategy_config,
+    parse_strategy_config,
+)
 from quant.data.cache import (  # noqa: E402
     load_bars,
     load_calendar,
@@ -86,6 +123,20 @@ from quant.eval.metrics import (  # noqa: E402
     benchmark_performance,
 )
 from quant.labels.open_to_open import DEFAULT_HORIZON  # noqa: E402
+from quant.portfolio.enhanced import (  # noqa: E402
+    STATUS_HELD,
+    STATUS_RELAXED,
+    EnhancedOptimizer,
+)
+from quant.portfolio.enhanced_inputs import (  # noqa: E402
+    benchmark_weights,
+    float_mv_frame,
+    float_mv_map,
+    industry_map,
+    industry_table,
+    style_frame,
+    style_map,
+)
 from quant.portfolio.optimizer import (  # noqa: E402
     InfeasibleError,
     PortfolioError,
@@ -95,6 +146,7 @@ from quant.portfolio.roundlot import round_weights_to_lots  # noqa: E402
 from quant.universe.members import (  # noqa: E402
     filter_bars_to_universe,
     mean_daily_instruments,
+    members_range,
 )
 from scripts.train_baseline import (  # noqa: E402
     TrainConfig,
@@ -152,6 +204,12 @@ SAMPLE_DAYS: int = 3
 #: 净值图 DPI。
 PNG_DPI: int = 120
 
+#: 指增个股带自洽性检查的绝对松弛：求解器容差 + ``_finalize`` 约零归一带来的微小偏移。
+BAND_CHECK_ABS_SLACK: float = 1e-4
+
+#: 指增日志保留的最大 warning 条数。
+MAX_ENHANCED_NOTES: int = 200
+
 ORDER_SIDE_BUY: str = "buy"
 ORDER_SIDE_SELL: str = "sell"
 
@@ -186,6 +244,12 @@ class E2EConfig:
     risk_report: bool = False
     #: 回测股票池（命名池名或自定义池路径）；None 表示全市场。须与训练配置一致。
     universe: str | None = None
+    #: 策略枚举：``stock_selection`` / ``index_enhanced``（issue #71）。
+    strategy: str = DEFAULT_STRATEGY
+    #: 指增调仓频率：``D`` / ``W`` / ``M``（仅 ``index_enhanced`` 生效）。
+    rebalance_freq: str = DEFAULT_REBALANCE_FREQ
+    #: 策略配置 JSON 路径；给了就用它的 ``optimize`` 等参数，并要求与上面各项一致。
+    strategy_config_path: Path | None = None
 
     @property
     def resolved_train_config_path(self) -> Path:
@@ -195,6 +259,46 @@ class E2EConfig:
             if self.train_config_path is not None
             else default_train_config_path(self.model_dir)
         )
+
+    def resolved_strategy_config(self) -> StrategyConfig:
+        """把命令行参数整理成已校验的 :class:`StrategyConfig`。
+
+        给了 ``--strategy-config`` 时以该 JSON 为准，但要求 ``strategy`` / ``universe`` /
+        ``benchmark`` / ``top_k`` / ``rebalance_freq`` 与命令行参数逐项一致，避免同一份
+        配置里出现两套互相矛盾的口径（与训练配置的 universe 校验同思路）。
+        """
+        if self.strategy_config_path is None:
+            try:
+                return parse_strategy_config(
+                    {
+                        "strategy": self.strategy,
+                        "universe": self.universe,
+                        "benchmark": self.benchmark,
+                        "top_k": self.top_k,
+                        "rebalance_freq": self.rebalance_freq,
+                        "optimize": {},
+                    }
+                )
+            except StrategyConfigError as exc:
+                raise E2EError(f"策略配置不合法：{exc}") from exc
+        loaded = load_strategy_config(self.strategy_config_path)
+        mismatched = [
+            name
+            for name, cli_value, file_value in (
+                ("strategy", self.strategy, loaded.strategy),
+                ("universe", self.universe, loaded.universe),
+                ("benchmark", self.benchmark, loaded.benchmark),
+                ("top_k", self.top_k, loaded.top_k),
+                ("rebalance_freq", self.rebalance_freq, loaded.rebalance_freq),
+            )
+            if cli_value != file_value
+        ]
+        if mismatched:
+            raise E2EError(
+                f"策略配置 {self.strategy_config_path} 与命令行参数不一致：{mismatched}；"
+                "请让两边给出同一份口径"
+            )
+        return loaded
 
 
 @dataclass
@@ -209,6 +313,59 @@ class SignalStats:
     hold_fallback: int = 0
     orders: int = 0
     notes: list[str] = field(default_factory=list)
+
+
+#: 指增逐日优化日志 schema（``enhanced_log.parquet``）。
+ENHANCED_LOG_SCHEMA: pl.Schema = pl.Schema(
+    {
+        "date": pl.Date,
+        "status": pl.String,
+        "relax_rounds": pl.Int64,
+        "turnover": pl.Float64,
+        "n_bench": pl.Int64,
+        "n_bench_candidates": pl.Int64,
+        "n_candidates": pl.Int64,
+        "cover_rate": pl.Float64,
+        "max_band_dev": pl.Float64,
+        "band_violations": pl.Int64,
+        "max_industry_ratio": pl.Float64,
+        "zero_bench_weight": pl.Float64,
+        "market_value_std": pl.Float64,
+        "style_std_max": pl.Float64,
+        "thresholds": pl.String,
+    }
+)
+
+
+@dataclass
+class EnhancedStats:
+    """指增路径的核对统计（issue #71）：覆盖度、个股带、放松轮次、行业快照退化。"""
+
+    rebalance_days: int = 0
+    non_rebalance_days: int = 0
+    held_days: int = 0
+    relax_rounds: Counter[int] = field(default_factory=Counter)
+    cover_rate_min: float | None = None
+    cover_rate_min_date: date | None = None
+    max_band_dev: float = 0.0
+    max_band_dev_date: date | None = None
+    band_violations: int = 0
+    industry_fallback_days: int = 0
+    bench_missing_days: int = 0
+    records: list[dict[str, Any]] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def add_note(self, text: str) -> None:
+        """记录一条 warning（上限 :data:`MAX_ENHANCED_NOTES`）。"""
+        if len(self.notes) < MAX_ENHANCED_NOTES:
+            self.notes.append(text)
+
+    @property
+    def log_frame(self) -> pl.DataFrame:
+        """逐日优化日志表（``records`` 为空时返回零行同 schema 表）。"""
+        if not self.records:
+            return pl.DataFrame(schema=ENHANCED_LOG_SCHEMA)
+        return pl.DataFrame(self.records, schema=ENHANCED_LOG_SCHEMA)
 
 
 @dataclass
@@ -232,6 +389,10 @@ class E2EResult:
     holdings_path: Path | None = None
     #: 持仓风险分析 markdown 路径（``--risk-report`` 未开启时为 None）。
     risk_report_path: Path | None = None
+    #: 指增逐日优化日志（``--strategy index_enhanced`` 时非 None）。
+    enhanced_log: pl.DataFrame | None = None
+    enhanced_log_path: Path | None = None
+    enhanced_stats: EnhancedStats | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +647,259 @@ def _optimize(
 
 
 # ---------------------------------------------------------------------------
+# 指增信号函数（issue #71）
+# ---------------------------------------------------------------------------
+
+
+def _band_check(
+    weights: dict[str, float],
+    bench_weights: dict[str, float],
+    band: float,
+) -> tuple[float, int]:
+    """个股带自洽性检查：返回 ``(|w_i − bench_norm_i| 最大值, 超带证券数)``。
+
+    ``bench_norm`` 为基准权重在候选集内归一后的值（与优化器约束同一口径）；
+    判定超带的条件为 ``deviation > band + BAND_CHECK_ABS_SLACK``。
+    """
+    total = float(sum(bench_weights.values()))
+    if total <= 0.0:
+        return 0.0, 0
+    limit = band + BAND_CHECK_ABS_SLACK
+    worst = 0.0
+    violations = 0
+    for instrument, bench in bench_weights.items():
+        deviation = abs(float(weights.get(instrument, 0.0)) - float(bench) / total)
+        worst = max(worst, deviation)
+        if deviation > limit:
+            violations += 1
+    return worst, violations
+
+
+def _exposure_diagnostics(exposures: dict[str, Any]) -> tuple[float, float, float, float]:
+    """从 :func:`quant.portfolio.enhanced.compute_exposures` 的结果抽出核对量。
+
+    返回 ``(行业最大相对偏离, 零基准行业上的组合权重, 市值偏离 std 倍数, 风格最大 std 倍数)``。
+    """
+    industry = exposures.get("industry", {})
+    max_ratio = 0.0
+    zero_bench = 0.0
+    for item in industry.values():
+        bench = float(item.get("bench", 0.0))
+        portfolio = float(item.get("portfolio", 0.0))
+        if bench > 0.0:
+            max_ratio = max(max_ratio, abs(portfolio / bench - 1.0))
+        else:
+            zero_bench = max(zero_bench, portfolio)
+    market_value = exposures.get("market_value", {})
+    mv_std = abs(float(market_value.get("std", 0.0)))
+    style = exposures.get("style", {})
+    style_std = max(
+        (abs(float(item.get("std", 0.0))) for item in style.values()), default=0.0
+    )
+    return max_ratio, zero_bench, mv_std, style_std
+
+
+def make_enhanced_signal_fn(
+    *,
+    data_dir: Path,
+    score_by_day: dict[date, pl.DataFrame],
+    close_panel: pl.DataFrame,
+    returns_panel: pl.DataFrame,
+    bars: pl.DataFrame,
+    calendar: pl.DataFrame,
+    strategy_config: StrategyConfig,
+    optimizer: EnhancedOptimizer,
+    lookback_days: int,
+    stats: SignalStats,
+    enhanced: EnhancedStats,
+) -> SignalFn:
+    """构造指增路径的 ``signal_fn``，口径与 ``run_daily`` 的指增分派一致。
+
+    候选 = 基准成分（PIT 权重）∪ 打分 top-K ∪ 当前持仓；非调仓日直接保持持仓（引擎
+    按市值自然漂移权重）。行业 / 流通市值 / 六风格在各日按 cutoff 截取，风格与市值
+    全窗口只算一次，避免逐日重算。
+    """
+    benchmark = strategy_config.benchmark
+    if benchmark is None:
+        raise E2EError("index_enhanced 策略缺少 benchmark")
+    open_days = calendar.filter(pl.col("is_open"))[DATE_COL].to_list()
+    style = style_frame(bars)
+    mv_frame = float_mv_frame(data_dir, bars)
+
+    def signal(day: date, _history: pl.DataFrame, account: Any) -> list[Order]:
+        stats.calls += 1
+        if not is_rebalance_day(open_days, day, strategy_config.rebalance_freq):
+            enhanced.non_rebalance_days += 1
+            return []
+        enhanced.rebalance_days += 1
+
+        score_frame = score_by_day.get(day)
+        if score_frame is None or score_frame.height == 0:
+            stats.empty_score_days += 1
+            return []
+        scores = score_frame.filter(
+            pl.col(SCORE_COL).is_not_null() & pl.col(SCORE_COL).is_finite()
+        )
+        if scores.height == 0:
+            stats.empty_score_days += 1
+            return []
+        scores = scores.sort([SCORE_COL, INSTRUMENT_COL], descending=[True, False])
+        score_map = {
+            str(row[INSTRUMENT_COL]): float(row[SCORE_COL])
+            for row in scores.iter_rows(named=True)
+        }
+        min_score = min(score_map.values())
+        top_instruments = [
+            str(inst)
+            for inst in scores.head(strategy_config.top_k)[INSTRUMENT_COL].to_list()
+        ]
+
+        bench = benchmark_weights(data_dir, benchmark, day)
+        if not bench:
+            enhanced.bench_missing_days += 1
+            stats.hold_fallback += 1
+            enhanced.add_note(f"{day.isoformat()}: 基准权重缺失，保持现状")
+            return []
+
+        positions = {
+            inst: pos for inst, pos in account.positions.items() if pos.volume > 0
+        }
+        current_volumes = {inst: pos.volume for inst, pos in positions.items()}
+
+        prices = _close_on(close_panel, day)
+        # 缺价持仓用摊薄成本兜底估值（与 pipeline 一致），仍无价则记 0，只用于估值。
+        for inst, pos in positions.items():
+            if inst not in prices:
+                prices[inst] = pos.avg_cost if pos.avg_cost > 0.0 else 0.0
+
+        bench_candidates = sorted(
+            inst for inst in bench if prices.get(inst, 0.0) > 0.0
+        )
+        ordered = list(
+            dict.fromkeys([*bench_candidates, *top_instruments, *current_volumes])
+        )
+        candidates = [inst for inst in ordered if prices.get(inst, 0.0) > 0.0]
+        if not candidates:
+            stats.hold_fallback += 1
+            enhanced.add_note(f"{day.isoformat()}: 候选取价失败，保持现状")
+            return []
+
+        nav = account.nav(prices)
+        if nav <= 0.0:
+            stats.hold_fallback += 1
+            enhanced.add_note(f"{day.isoformat()}: nav 非正，保持现状")
+            return []
+
+        candidate_set = set(candidates)
+        current_weights = {
+            inst: prices[inst] * volume / nav
+            for inst, volume in current_volumes.items()
+            if inst in candidate_set
+        }
+        alpha = {inst: score_map.get(inst, min_score) for inst in candidates}
+        returns = select_returns(returns_panel, candidates, day, lookback_days)
+        if returns.height < 2:
+            stats.hold_fallback += 1
+            enhanced.add_note(f"{day.isoformat()}: 收益观测不足，保持现状")
+            return []
+
+        bench_cands = {inst: bench[inst] for inst in bench_candidates}
+        covered = sorted(set(candidates) | set(bench_cands))
+        industry_table_frame, fallback = industry_table(data_dir, day, covered)
+        if fallback:
+            enhanced.industry_fallback_days += 1
+        industry = industry_map(industry_table_frame)
+
+        stats.optimize_calls += 1
+        try:
+            outcome = optimizer.optimize_day(
+                date=day,
+                instruments=candidates,
+                alpha=alpha,
+                bench_weights=bench_cands,
+                industry=industry,
+                float_mv=float_mv_map(mv_frame, day),
+                style=style_map(style, day),
+                covariance=returns,
+                w_prev=current_weights or None,
+            )
+        except (ValueError, PortfolioError) as exc:
+            stats.hold_fallback += 1
+            enhanced.add_note(f"{day.isoformat()}: 指增优化异常，保持现状（{exc}）")
+            return []
+
+        band_dev, band_violations = _band_check(
+            outcome.weights, bench_cands, optimizer.stock_band
+        )
+        max_industry, zero_bench, mv_std, style_std = _exposure_diagnostics(
+            outcome.exposures
+        )
+        cover_rate = float(outcome.exposures.get("cover_rate", 0.0))
+        enhanced.relax_rounds[int(outcome.relax_rounds)] += 1
+        if band_dev >= enhanced.max_band_dev:
+            enhanced.max_band_dev = band_dev
+            enhanced.max_band_dev_date = day
+        enhanced.band_violations += band_violations
+        if enhanced.cover_rate_min is None or cover_rate < enhanced.cover_rate_min:
+            enhanced.cover_rate_min = cover_rate
+            enhanced.cover_rate_min_date = day
+        enhanced.records.append(
+            {
+                "date": day,
+                "status": str(outcome.status),
+                "relax_rounds": int(outcome.relax_rounds),
+                "turnover": float(outcome.turnover),
+                "n_bench": len(bench),
+                "n_bench_candidates": len(bench_candidates),
+                "n_candidates": len(candidates),
+                "cover_rate": cover_rate,
+                "max_band_dev": band_dev,
+                "band_violations": band_violations,
+                "max_industry_ratio": max_industry,
+                "zero_bench_weight": zero_bench,
+                "market_value_std": mv_std,
+                "style_std_max": style_std,
+                "thresholds": json.dumps(outcome.thresholds, ensure_ascii=False),
+            }
+        )
+
+        if band_violations:
+            enhanced.add_note(
+                f"{day.isoformat()}: 个股带超带 {band_violations} 只，最大偏离 {band_dev:.6f}"
+            )
+        if outcome.status == STATUS_HELD:
+            enhanced.held_days += 1
+            stats.hold_fallback += 1
+            enhanced.add_note(f"{day.isoformat()}: 指增优化失败，保持现状")
+            return []
+        if outcome.status == STATUS_RELAXED:
+            stats.relaxed_attempts += 1
+            stats.relaxed_success += 1
+
+        try:
+            target_weights = normalize_weights(dict(outcome.weights))
+            rounded = round_weights_to_lots(target_weights, prices, nav)
+        except (ValueError, E2EError) as exc:
+            stats.hold_fallback += 1
+            enhanced.add_note(f"{day.isoformat()}: 目标权重取整失败，保持现状（{exc}）")
+            return []
+
+        target_volumes = {
+            str(row["instrument"]): int(row["volume"])
+            for row in rounded.orders.iter_rows(named=True)
+        }
+        diff = diff_orders(target_volumes, current_volumes)
+        orders = [
+            Order(str(row["instrument"]), str(row["side"]), int(row["volume"]))
+            for row in diff.iter_rows(named=True)
+        ]
+        stats.orders += len(orders)
+        return orders
+
+    return signal
+
+
+# ---------------------------------------------------------------------------
 # 运行
 # ---------------------------------------------------------------------------
 
@@ -495,10 +909,12 @@ def run_e2e(
     *,
     trainer: BaselineTrainer | None = None,
     optimizer: PortfolioOptimizer | None = None,
+    enhanced_optimizer: EnhancedOptimizer | None = None,
 ) -> E2EResult:
     """执行端到端回测并落盘，返回 :class:`E2EResult`。
 
-    ``trainer`` / ``optimizer`` 用于依赖注入（测试传假对象，不加载真模型、不跑真 cvxpy）。
+    ``trainer`` / ``optimizer`` / ``enhanced_optimizer`` 用于依赖注入（测试传假对象，
+    不加载真模型、不跑真 cvxpy）。
     """
     started = time.monotonic()
     if config.end < config.start:
@@ -519,18 +935,33 @@ def run_e2e(
             f"{config.universe!r} 不一致，请显式给出匹配的 --universe"
         )
 
+    # -- 策略配置校验（issue #71）------------------------------------------
+    strategy_config = config.resolved_strategy_config()
+    if strategy_config.is_index_enhanced and config.benchmark is None:
+        raise E2EError("index_enhanced 策略必须给出 --benchmark")
+
     # -- 行情窗口：start 之前留 lookback + 因子余量，供因子与收益矩阵预热 ----------
     calendar = load_calendar(config.data_dir)
     window_start = _window_start(
         calendar, config.start, config.lookback_days + FACTOR_WINDOW_MARGIN
     )
-    bars = load_bars(config.data_dir, start=window_start, end=config.end)
-    if bars.height == 0:
+    loaded = load_bars(config.data_dir, start=window_start, end=config.end)
+    if loaded.height == 0:
         raise E2EError(f"行情窗口 [{window_start}, {config.end}] 内没有数据")
+    bars = loaded
+    #: 引擎侧行情：universe 非空时放宽到「窗口内曾属于该池」的并集，保证调样后离池的
+    #: 持仓仍能卖出 / 估值（逐日 PIT 裁剪会让离池票在 broker 眼里变成停牌）。
+    engine_bars = loaded
     if config.universe is not None:
-        bars = filter_bars_to_universe(bars, config.universe, data_dir=config.data_dir)
+        bars = filter_bars_to_universe(loaded, config.universe, data_dir=config.data_dir)
         if bars.height == 0:
             raise E2EError(f"股票池 {config.universe!r} 在窗口内没有行情")
+        pool = members_range(
+            config.universe, window_start, config.end, data_dir=config.data_dir
+        )
+        engine_bars = loaded.filter(
+            pl.col(INSTRUMENT_COL).is_in(pool[INSTRUMENT_COL].unique().to_list())
+        )
     universe_mean_daily = mean_daily_instruments(bars)
     actions = load_corporate_actions(
         config.data_dir, start=config.start, end=config.end
@@ -554,30 +985,55 @@ def run_e2e(
     scores = active_trainer.predict(dataset)
     score_by_day = _group_scores(scores, config.start, config.end)
     logger.info(
-        "打分覆盖 %d 个信号日，行情窗口 %s ~ %s，%d 行",
+        "打分覆盖 %d 个信号日，行情窗口 %s ~ %s，%d 行（策略 %s）",
         len(score_by_day),
         window_start,
         config.end,
         bars.height,
+        strategy_config.strategy,
     )
 
-    close_panel = build_close_panel(bars)
-    returns_panel = build_returns_panel(bars)
+    close_panel = build_close_panel(engine_bars)
+    returns_panel = build_returns_panel(engine_bars)
 
     stats = SignalStats()
-    active_optimizer = optimizer if optimizer is not None else PortfolioOptimizer()
-    signal_fn = make_signal_fn(
-        score_by_day,
-        close_panel,
-        returns_panel,
-        active_optimizer,
-        top_k=config.top_k,
-        lookback_days=config.lookback_days,
-        stats=stats,
-    )
+    enhanced_stats: EnhancedStats | None = None
+    if strategy_config.is_index_enhanced:
+        enhanced_stats = EnhancedStats()
+        enhanced_optimizer = (
+            enhanced_optimizer
+            if enhanced_optimizer is not None
+            else build_enhanced_optimizer(strategy_config)
+        )
+        signal_fn = make_enhanced_signal_fn(
+            data_dir=config.data_dir,
+            score_by_day=score_by_day,
+            close_panel=close_panel,
+            returns_panel=returns_panel,
+            bars=engine_bars,
+            calendar=calendar,
+            strategy_config=strategy_config,
+            optimizer=enhanced_optimizer,
+            lookback_days=config.lookback_days,
+            stats=stats,
+            enhanced=enhanced_stats,
+        )
+    else:
+        active_optimizer = (
+            optimizer if optimizer is not None else build_stock_optimizer(strategy_config)
+        )
+        signal_fn = make_signal_fn(
+            score_by_day,
+            close_panel,
+            returns_panel,
+            active_optimizer,
+            top_k=config.top_k,
+            lookback_days=config.lookback_days,
+            stats=stats,
+        )
 
     result = BacktestEngine(Broker(FeeModel())).run(
-        bars,
+        engine_bars,
         calendar,
         actions,
         signal_fn,
@@ -590,6 +1046,7 @@ def run_e2e(
     benchmark_summary = benchmark[0] if benchmark is not None else None
     benchmark_series = benchmark[1] if benchmark is not None else None
 
+    enhanced_log = enhanced_stats.log_frame if enhanced_stats is not None else None
     nav_path, report_path, states_path, png_path, benchmark_path = _write_outputs(
         config,
         result,
@@ -599,7 +1056,13 @@ def run_e2e(
         benchmark_summary,
         benchmark_series,
         universe_mean_daily,
+        strategy_config,
+        enhanced_stats,
     )
+    enhanced_log_path = None
+    if enhanced_log is not None:
+        enhanced_log_path = config.out_dir / "enhanced_log.parquet"
+        enhanced_log.write_parquet(enhanced_log_path)
     holdings_path = config.out_dir / "holdings.parquet"
     holdings = build_holdings_weights(result, close_panel)
     holdings.write_parquet(holdings_path)
@@ -627,6 +1090,9 @@ def run_e2e(
         benchmark_path=benchmark_path,
         holdings_path=holdings_path,
         risk_report_path=risk_report_path,
+        enhanced_log=enhanced_log,
+        enhanced_log_path=enhanced_log_path,
+        enhanced_stats=enhanced_stats,
     )
 
 
@@ -789,6 +1255,8 @@ def _write_outputs(
     benchmark_summary: BenchmarkSummary | None = None,
     benchmark_series: pl.DataFrame | None = None,
     universe_mean_daily: float = 0.0,
+    strategy_config: StrategyConfig | None = None,
+    enhanced_stats: EnhancedStats | None = None,
 ) -> tuple[Path, Path, Path, Path, Path | None]:
     out_dir = config.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -811,6 +1279,8 @@ def _write_outputs(
             train_config,
             benchmark_summary,
             universe_mean_daily,
+            strategy_config,
+            enhanced_stats,
         ),
         encoding="utf-8",
     )
@@ -859,8 +1329,13 @@ def render_report(
     train_config: TrainConfig | None,
     benchmark: BenchmarkSummary | None = None,
     universe_mean_daily: float = 0.0,
+    strategy_config: StrategyConfig | None = None,
+    enhanced_stats: EnhancedStats | None = None,
 ) -> str:
-    """渲染 ``report.md``：头部配置 + 绩效（含基准 / 超额）+ 成交 / 拒单 / 公司行为统计。"""
+    """渲染 ``report.md``：头部配置 + 绩效（含基准 / 超额）+ 成交 / 拒单 / 公司行为统计。
+
+    ``index_enhanced`` 时追加「指增核对」段（覆盖度、个股带、放松轮次、行业快照退化）。
+    """
     lines: list[str] = []
     lines.append("# 端到端回测报告（issue #16）")
     lines.append("")
@@ -879,6 +1354,8 @@ def render_report(
         ("initial_cash", f"{config.initial_cash:.2f}"),
         ("top_k", str(config.top_k)),
         ("lookback_days", str(config.lookback_days)),
+        ("strategy", config.strategy),
+        ("rebalance_freq", config.rebalance_freq),
         ("benchmark", config.benchmark or "（未指定）"),
         ("universe", config.universe or "（全市场）"),
         (
@@ -887,6 +1364,13 @@ def render_report(
         ),
         ("out_dir", str(config.out_dir)),
     ]
+    if strategy_config is not None and strategy_config.optimize:
+        rows.append(
+            (
+                "strategy.optimize",
+                json.dumps(strategy_config.optimize, ensure_ascii=False),
+            )
+        )
     if train_config is not None:
         rows.extend(
             [
@@ -952,6 +1436,9 @@ def render_report(
     lines.append(f"- 生成订单笔数合计：{stats.orders}")
     lines.append("")
 
+    if enhanced_stats is not None:
+        lines.extend(_render_enhanced_rows(strategy_config, enhanced_stats))
+
     if stats.notes:
         lines.append("### 降级与警告（最多 20 条）")
         lines.append("")
@@ -961,6 +1448,52 @@ def render_report(
             lines.append(f"- ...（其余 {len(stats.notes) - 20} 条略）")
         lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _render_enhanced_rows(
+    strategy_config: StrategyConfig | None, enhanced: EnhancedStats
+) -> list[str]:
+    """指增核对段：覆盖度 / 个股带 / 放松轮次 / 行业快照退化（issue #71）。"""
+    lines: list[str] = ["### 指增核对（index_enhanced）", ""]
+    band = 0.0
+    cover_min = 0.0
+    if strategy_config is not None and strategy_config.optimize:
+        band = float(strategy_config.optimize.get("stock_band", 0.0))
+        cover_min = float(strategy_config.optimize.get("cover_rate_min", 0.0))
+    lines.append(
+        f"- 调仓日 / 非调仓日：{enhanced.rebalance_days} / {enhanced.non_rebalance_days}"
+    )
+    lines.append(f"- 优化失败保持持仓日数：{enhanced.held_days}")
+    lines.append(f"- 基准权重缺失日数：{enhanced.bench_missing_days}")
+    rounds = "、".join(
+        f"{count} 轮 {days} 日" for count, days in sorted(enhanced.relax_rounds.items())
+    )
+    lines.append(f"- 放松轮次分布：{rounds or '（无调仓日）'}")
+    if enhanced.cover_rate_min is None:
+        lines.append("- 最小成分覆盖度：-")
+    else:
+        lines.append(
+            f"- 最小成分覆盖度：{enhanced.cover_rate_min:.4f}"
+            f"（{enhanced.cover_rate_min_date}，下限 {cover_min:.2f}）"
+        )
+    lines.append(
+        f"- 个股带最大偏离：{enhanced.max_band_dev:.6f}"
+        f"（{enhanced.max_band_dev_date}，带 ±{band:.4f} + 容差 {BAND_CHECK_ABS_SLACK:.0e}）"
+    )
+    lines.append(f"- 个股带超带累计只次数：{enhanced.band_violations}")
+    lines.append(
+        f"- 行业快照退化日数（无 PIT 快照，退化到最新一份）：{enhanced.industry_fallback_days}"
+    )
+    lines.append("")
+    if enhanced.notes:
+        lines.append("#### 指增 warning（最多 20 条）")
+        lines.append("")
+        for note in enhanced.notes[:20]:
+            lines.append(f"- {note}")
+        if len(enhanced.notes) > 20:
+            lines.append(f"- ...（其余 {len(enhanced.notes) - 20} 条略）")
+        lines.append("")
+    return lines
 
 
 def render_account_states(
@@ -976,8 +1509,10 @@ def render_account_states(
 
     sample = _sample_days(fill_days, SAMPLE_DAYS)
     nav_rows = {row["date"]: row for row in result.nav.iter_rows(named=True)}
+    nav_dates = [row["date"] for row in result.nav.iter_rows(named=True)]
+    nav_index = {day: index for index, day in enumerate(nav_dates)}
     positions = _reconstruct_positions(
-        [row["date"] for row in result.nav.iter_rows(named=True)],
+        nav_dates,
         result.fills,
         result.corporate_actions,
     )
@@ -991,6 +1526,7 @@ def render_account_states(
     lines.append(
         "持仓由区间内全部成交与公司行为回放重建，现金 / 市值 / nav 取自 `nav.parquet`；"
         "总市值应等于 `nav.parquet` 的 market_value（差异来自停牌前向填充价与分红送转时点）。"
+        "每日附「勾稽」三项：现金变动 vs 成交流水、持仓明细合计 vs 市值、现金 + 市值 vs nav。"
     )
     lines.append("")
     for day in sample:
@@ -1039,6 +1575,19 @@ def render_account_states(
             lines.append("（无）")
         lines.append("")
 
+        lines.extend(
+            _render_reconciliation(
+                day,
+                row,
+                day_fills,
+                [detail for detail in result.corporate_actions if detail.date == day],
+                total_value,
+                nav_dates,
+                nav_index,
+                nav_rows,
+            )
+        )
+
         lines.append("### 当日拒单")
         lines.append("")
         day_rejects = rejects_by_day.get(day, [])
@@ -1054,6 +1603,49 @@ def render_account_states(
             lines.append("（无）")
         lines.append("")
     return "\n".join(lines)
+
+
+def _render_reconciliation(
+    day: date,
+    row: dict[str, Any],
+    day_fills: list[Any],
+    day_actions: list[Any],
+    total_value: float,
+    nav_dates: list[date],
+    nav_index: dict[date, int],
+    nav_rows: dict[date, dict[str, Any]],
+) -> list[str]:
+    """逐日勾稽：现金变动 vs 成交流水 + 分红现金、持仓明细合计 vs ``nav.parquet`` 市值。"""
+    lines: list[str] = ["### 勾稽", ""]
+    dividends = sum(float(detail.cash_received) for detail in day_actions)
+    position = nav_index.get(day)
+    if position is None or position == 0:
+        lines.append("- 现金勾稽：区间首日无前一日现金，跳过。")
+    else:
+        previous = nav_rows[nav_dates[position - 1]]
+        actual = float(row["cash"]) - float(previous["cash"])
+        trades = sum(
+            (fill.notional if fill.side == ORDER_SIDE_SELL else -fill.notional)
+            - fill.fee.cash_cost
+            for fill in day_fills
+        )
+        lines.append(
+            f"- 现金勾稽：现金_t − 现金_(t−1) = {actual:.2f}；"
+            f"成交流水（卖 − 买 − 现金费用）＝ {trades:.2f}；"
+            f"公司行为现金 ＝ {dividends:.2f}；差 {actual - trades - dividends:.4f}"
+        )
+    diff = total_value - float(row["market_value"])
+    lines.append(
+        f"- 市值勾稽：持仓明细合计 {total_value:.2f} vs nav.parquet 市值 "
+        f"{float(row['market_value']):.2f}；差 {diff:.4f}"
+    )
+    lines.append(
+        f"- nav 勾稽：现金 + 市值 = {float(row['cash']) + float(row['market_value']):.2f} "
+        f"vs nav {float(row['nav']):.2f}；差 "
+        f"{float(row['cash']) + float(row['market_value']) - float(row['nav']):.4f}"
+    )
+    lines.append("")
+    return lines
 
 
 def _sample_days(days: list[date], count: int) -> list[date]:
@@ -1242,13 +1834,30 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="股票池：命名池名（hs300/zz500/zz1000/zz2000）或自定义池文件路径；须与训练一致",
     )
+    parser.add_argument(
+        "--strategy",
+        default=DEFAULT_STRATEGY,
+        choices=list(STRATEGIES),
+        help=f"策略：{list(STRATEGIES)}，默认 {DEFAULT_STRATEGY}",
+    )
+    parser.add_argument(
+        "--rebalance-freq",
+        default=DEFAULT_REBALANCE_FREQ,
+        choices=list(REBALANCE_FREQS),
+        help=f"指增调仓频率，默认 {DEFAULT_REBALANCE_FREQ}",
+    )
+    parser.add_argument(
+        "--strategy-config",
+        default=None,
+        help="策略配置 JSON 路径（issue #70 格式）；与命令行同名参数须一致",
+    )
     return parser
 
 
 def _print_summary(result: E2EResult) -> None:
     metrics = result.metrics
     print("\n# 端到端回测完成")
-    print(f"区间：{result.config.start} ~ {result.config.end}")
+    print(f"区间：{result.config.start} ~ {result.config.end}（策略 {result.config.strategy}）")
     print(f"期末净值 {metrics['final_nav']:.2f}    总收益 {metrics['total_return']:.4%}")
     print(
         f"年化 {metrics['annualized_return']:.4%}    最大回撤 {metrics['max_drawdown']:.4%}    "
@@ -1283,6 +1892,20 @@ def _print_summary(result: E2EResult) -> None:
         print(f"持仓权重：{result.holdings_path}")
     if result.risk_report_path is not None:
         print(f"风险分析：{result.risk_report_path}")
+    if result.enhanced_stats is not None:
+        stats = result.enhanced_stats
+        cover = (
+            f"{stats.cover_rate_min:.4f}"
+            if stats.cover_rate_min is not None
+            else "-"
+        )
+        print(
+            f"指增：调仓 {stats.rebalance_days} 日，保持持仓 {stats.held_days} 日，"
+            f"最小覆盖度 {cover}，个股带最大偏离 {stats.max_band_dev:.6f}"
+            f"（超带 {stats.band_violations} 只次），行业快照退化 {stats.industry_fallback_days} 日"
+        )
+    if result.enhanced_log_path is not None:
+        print(f"指增日志：{result.enhanced_log_path}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1311,6 +1934,11 @@ def main(argv: list[str] | None = None) -> int:
         benchmark=args.benchmark,
         risk_report=args.risk_report,
         universe=args.universe,
+        strategy=args.strategy,
+        rebalance_freq=args.rebalance_freq,
+        strategy_config_path=(
+            Path(args.strategy_config) if args.strategy_config else None
+        ),
     )
     result = run_e2e(config)
     _print_summary(result)

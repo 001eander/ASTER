@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
@@ -25,11 +26,15 @@ from quant.automl.dataset import INSTRUMENT_COL
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    FLOAT_MV,
     INDEX_BARS,
     INDEX_MEMBERS,
+    INDEX_WEIGHTS,
+    INDUSTRY,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
 )
+from quant.portfolio.enhanced import EnhancedOptimizer
 from quant.portfolio.optimizer import InfeasibleError, PortfolioOptimizer
 from scripts import backtest_e2e as e2e
 from scripts import train_baseline as tb
@@ -160,6 +165,49 @@ def _write_index_members(
     pl.DataFrame(rows, schema=INDEX_MEMBERS).write_parquet(
         data_dir / "index_members.parquet"
     )
+
+
+def _write_index_weights(
+    data_dir: Path, days: list[date], instruments: list[str], code: str = "000852"
+) -> None:
+    """写一份日频等权指数权重（PIT 基准），供指增路径读基准。"""
+    share = 1.0 / len(instruments)
+    rows = [
+        {"date": day, "instrument": instrument, "index_code": code, "weight": share}
+        for day in days
+        for instrument in instruments
+    ]
+    pl.DataFrame(rows, schema=INDEX_WEIGHTS).write_parquet(
+        data_dir / "index_weights.parquet"
+    )
+
+
+def _write_industry(data_dir: Path, instruments: list[str]) -> None:
+    """写一份全覆盖的行业归属（issue #65 口径），指增的行业约束需要它。"""
+    pl.DataFrame(
+        [
+            {
+                "instrument": instrument,
+                "industry_l1": "信息技术",
+                "industry_l2": "半导体",
+                "effective_from": date(2020, 1, 1),
+            }
+            for instrument in instruments
+        ],
+        schema=INDUSTRY,
+    ).write_parquet(data_dir / "industry.parquet")
+
+
+def _write_float_mv(
+    data_dir: Path, days: list[date], instruments: list[str], value: float = 1.0e7
+) -> None:
+    """写一份常数流通市值（千元），替代等效市值分支。"""
+    rows = [
+        {"date": day, "instrument": instrument, "float_mv": value}
+        for day in days
+        for instrument in instruments
+    ]
+    pl.DataFrame(rows, schema=FLOAT_MV).write_parquet(data_dir / "float_mv.parquet")
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +504,7 @@ def test_run_e2e_generates_orders_and_writes_artifacts(tmp_path: Path) -> None:
     states_text = result.states_path.read_text(encoding="utf-8")
     assert "持仓明细" in states_text
     assert "当日成交" in states_text
+    assert "### 勾稽" in states_text
 
 
 def test_run_e2e_empty_scores_produces_no_orders(tmp_path: Path) -> None:
@@ -596,6 +645,188 @@ def test_run_e2e_risk_report_wiring(tmp_path: Path) -> None:
     assert result.risk_report_path.exists()
     text = result.risk_report_path.read_text(encoding="utf-8")
     assert "## 指数分布" in text
+
+
+# ---------------------------------------------------------------------------
+# run_e2e：指增分派（issue #71）
+# ---------------------------------------------------------------------------
+
+
+def _enhanced_config(
+    tmp_path: Path,
+    data_dir: Path,
+    days: list[date],
+    *,
+    top_k: int = 4,
+    strategy_config_path: Path | None = None,
+    rebalance_freq: str = "D",
+) -> e2e.E2EConfig:
+    return replace(
+        _e2e_config(tmp_path, data_dir, days, top_k=top_k),
+        strategy="index_enhanced",
+        universe="zz1000",
+        benchmark="000852",
+        rebalance_freq=rebalance_freq,
+        strategy_config_path=strategy_config_path,
+    )
+
+
+def _write_enhanced_fixture(
+    tmp_path: Path, *, rebalance_freq: str = "D"
+) -> tuple[e2e.E2EConfig, list[str], _FakeTrainer]:
+    """指增用合成数据：池内 4 票同时是基准成分，行业 / 流通市值齐备。"""
+    data_dir, instruments, days = _write_data_dir(tmp_path)
+    pool = instruments[:4]
+    _write_index_members(data_dir, days, pool, code="000852")
+    _write_index_weights(data_dir, days, pool, code="000852")
+    _write_index_bars(data_dir, days, code="000852")
+    _write_industry(data_dir, instruments)
+    _write_float_mv(data_dir, days, pool)
+
+    factors = tb.discover_factors(FACTOR_LIBRARY)
+    _write_train_config(
+        tmp_path / "model",
+        feature_columns=list(factors),
+        start=days[0],
+        end=days[-1],
+        n_rows=100,
+        universe="zz1000",
+    )
+    trainer = _FakeTrainer(_score_map(instruments))
+    config = _enhanced_config(
+        tmp_path, data_dir, days, top_k=len(pool), rebalance_freq=rebalance_freq
+    )
+    return config, pool, trainer
+
+
+def _loose_enhanced_optimizer() -> EnhancedOptimizer:
+    """合成样本只有 4 票，带约束按相对基准放得很宽，只验证分派与求解链路。"""
+    return EnhancedOptimizer(
+        stock_band=0.05,
+        cover_rate_min=0.5,
+        turnover_max=1.0,
+        industry_exposure=100.0,
+        market_value_exposure=100.0,
+        style_exposure=100.0,
+    )
+
+
+def test_run_e2e_index_enhanced_dispatch_and_log(tmp_path: Path) -> None:
+    """指增分派走通：真实 EnhancedOptimizer 求解、落 enhanced_log.parquet、报告含指增核对。"""
+    config, pool, trainer = _write_enhanced_fixture(tmp_path)
+
+    result = e2e.run_e2e(
+        config, trainer=trainer, enhanced_optimizer=_loose_enhanced_optimizer()
+    )
+
+    assert result.result.fills, "指增路径应产生成交"
+    assert result.stats.calls > 0
+    assert result.stats.optimize_calls > 0
+
+    # 产出的日志表：逐调仓日一行，覆盖度 / 个股带 / 放松轮数齐备。
+    assert result.enhanced_log_path is not None and result.enhanced_log_path.exists()
+    log = pl.read_parquet(result.enhanced_log_path)
+    assert set(e2e.ENHANCED_LOG_SCHEMA) <= set(log.columns)
+    assert log.height == result.enhanced_stats.rebalance_days
+    assert log["n_candidates"].min() >= len(pool)
+    assert log["cover_rate"].min() >= 0.5
+    assert result.enhanced_stats.cover_rate_min >= 0.5
+    assert result.enhanced_stats.band_violations == 0
+    assert result.enhanced_stats.held_days == 0
+    assert result.enhanced_stats.industry_fallback_days == 0
+
+    report_text = result.report_path.read_text(encoding="utf-8")
+    assert "| strategy | index_enhanced |" in report_text
+    assert "### 指增核对（index_enhanced）" in report_text
+    assert "最小成分覆盖度" in report_text
+
+
+def test_run_e2e_index_enhanced_requires_benchmark(tmp_path: Path) -> None:
+    config, _pool, trainer = _write_enhanced_fixture(tmp_path)
+    config = replace(config, benchmark=None)
+    with pytest.raises(e2e.E2EError, match="benchmark"):
+        e2e.run_e2e(config, trainer=trainer)
+
+
+def test_run_e2e_index_enhanced_conflicting_strategy_config(tmp_path: Path) -> None:
+    """``--strategy-config`` 与命令行不一致时报错，避免两套口径混用。"""
+    config, _pool, trainer = _write_enhanced_fixture(tmp_path)
+    path = tmp_path / "strategy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "strategy": "stock_selection",
+                "universe": "zz1000",
+                "benchmark": "000852",
+                "top_k": 4,
+                "rebalance_freq": "D",
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = replace(config, strategy_config_path=path)
+    with pytest.raises(e2e.E2EError, match="不一致"):
+        e2e.run_e2e(config, trainer=trainer)
+
+
+def test_run_e2e_index_enhanced_strategy_config_matches(tmp_path: Path) -> None:
+    """``--strategy-config`` 与命令行一致时按 JSON 的 optimize 构造优化器。"""
+    config, _pool, trainer = _write_enhanced_fixture(tmp_path)
+    path = tmp_path / "strategy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "strategy": "index_enhanced",
+                "universe": "zz1000",
+                "benchmark": "000852",
+                "top_k": 4,
+                "rebalance_freq": "D",
+                "optimize": {
+                    "stock_band": 0.05,
+                    "cover_rate_min": 0.5,
+                    "turnover_max": 1.0,
+                    "industry_exposure": 100.0,
+                    "market_value_exposure": 100.0,
+                    "style_exposure": 100.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = replace(config, strategy_config_path=path)
+
+    result = e2e.run_e2e(config, trainer=trainer)
+
+    assert result.result.fills
+    # 报告记录优化器参数，且个股带按 JSON 的 0.05 判定。
+    report_text = result.report_path.read_text(encoding="utf-8")
+    assert "strategy.optimize" in report_text
+    assert "带 ±0.0500" in report_text
+
+
+def test_run_e2e_stock_selection_default_unchanged(tmp_path: Path) -> None:
+    """默认策略仍是 stock_selection：不落 enhanced_log，报告无指增段。"""
+    config, _days, trainer = _build_e2e_fixture(tmp_path, scores=None)
+    optimizer = PortfolioOptimizer(lam=1.0, kappa=0.002, w_max=0.5, max_turnover=0.30)
+
+    result = e2e.run_e2e(config, trainer=trainer, optimizer=optimizer)
+
+    assert result.enhanced_log is None
+    assert result.enhanced_log_path is None
+    assert result.enhanced_stats is None
+    assert "指增核对" not in result.report_path.read_text(encoding="utf-8")
+
+
+def test_band_check_flags_violation() -> None:
+    bench = {"A": 0.5, "B": 0.5}
+    # 完全贴基准：无偏离。
+    assert e2e._band_check(dict(bench), bench, 0.005) == (0.0, 0)
+    # A 超配 0.01，超出 0.005 带 + 松弛；满仓约束下超配必然伴随另一只低配，故两只都算超带。
+    dev, violations = e2e._band_check({"A": 0.51, "B": 0.49}, bench, 0.005)
+    assert dev == pytest.approx(0.01, abs=1e-12)
+    assert violations == 2
+    # 空基准：不产生判定。
+    assert e2e._band_check({"A": 1.0}, {}, 0.005) == (0.0, 0)
 
 
 # ---------------------------------------------------------------------------

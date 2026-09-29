@@ -50,8 +50,7 @@ from quant.automl.dataset import (
 )
 from quant.automl.trainer import DEFAULT_MODEL_DIR, SCORE_COL, BaselineTrainer
 from quant.backtest.broker import PRICE_EPSILON
-from quant.data.cache import load_bars, load_calendar, load_industry
-from quant.data.index_members import index_weights_on
+from quant.data.cache import load_bars, load_calendar
 from quant.data.schema import board_of
 from quant.data.validate import validate
 from quant.daily.strategy import (
@@ -72,6 +71,16 @@ from quant.portfolio.enhanced import (
     STATUS_RELAXED,
     EnhancedOptimizer,
 )
+from quant.portfolio.enhanced_inputs import (
+    benchmark_weights,
+    float_mv_frame,
+    float_mv_map,
+    industry_map,
+    industry_table,
+    returns_matrix,
+    style_frame,
+    style_map,
+)
 from quant.portfolio.optimizer import (
     InfeasibleError,
     OptimizeResult,
@@ -79,11 +88,6 @@ from quant.portfolio.optimizer import (
     PortfolioOptimizer,
 )
 from quant.portfolio.roundlot import round_weights_to_lots
-from quant.portfolio.style import (
-    STYLE_FACTOR_NAMES,
-    compute_style_factors,
-    equivalent_market_value,
-)
 from quant.universe.members import members
 
 logger = logging.getLogger(__name__)
@@ -675,7 +679,7 @@ def _optimize_enhanced_path(
     notes: list[str] = []
     if config.benchmark is None:
         raise DailyError("index_enhanced 策略缺少 benchmark")
-    bench_weights = _benchmark_weights(data_dir, config.benchmark, signal_day)
+    bench_weights = benchmark_weights(data_dir, config.benchmark, signal_day)
     if not bench_weights:
         raise DailyError(
             f"基准 {config.benchmark} 在 {signal_day} 及以前没有权重数据，"
@@ -764,17 +768,6 @@ def _optimize_enhanced_path(
     return outcome, len(candidates), notes
 
 
-def _benchmark_weights(
-    data_dir: Path, index_code: str, signal_day: date
-) -> dict[str, float]:
-    """基准在信号日或之前最近的 PIT 权重 ``{instrument: weight}``（原始口径，和约 1）。"""
-    frame = index_weights_on(Path(data_dir), index_code, signal_day)
-    return {
-        str(row["instrument"]): float(row["weight"])
-        for row in frame.iter_rows(named=True)
-    }
-
-
 def _enhanced_exposures(
     data_dir: Path,
     bars: pl.DataFrame,
@@ -782,50 +775,23 @@ def _enhanced_exposures(
     candidates: Sequence[str],
     bench_weights: Mapping[str, float],
 ) -> tuple[dict[str, str], dict[str, float], dict[str, dict[str, float]]]:
-    """组装指增优化所需的行业 / 等效市值 / 六风格暴露映射（均按 cutoff 截取）。"""
+    """组装指增优化所需的行业 / 流通市值 / 六风格暴露映射（均按 cutoff 截取）。
+
+    行业优先取 ``effective_from <= signal_day`` 的快照；仓库暂无历史快照时退化到
+    最新一份并记 warning（与 :mod:`quant.portfolio.enhanced_inputs` 约定一致）。
+    """
     covered = sorted(set(candidates) | set(bench_weights))
-    industry_frame = load_industry(
-        data_dir, as_of=signal_day, instruments=covered
+    industry_frame, fallback = industry_table(data_dir, signal_day, covered)
+    if fallback:
+        logger.warning(
+            "%s 没有不晚于该日的行业快照，行业归属退化到表内最新一份（数据可得性限制）",
+            signal_day,
+        )
+    return (
+        industry_map(industry_frame),
+        float_mv_map(float_mv_frame(data_dir, bars), signal_day),
+        style_map(style_frame(bars), signal_day),
     )
-    industry = {
-        str(row["instrument"]): str(row["industry_l1"])
-        for row in industry_frame.iter_rows(named=True)
-    }
-    return industry, _float_mv_map(bars, signal_day), _style_map(bars, signal_day)
-
-
-def _float_mv_map(bars: pl.DataFrame, signal_day: date) -> dict[str, float]:
-    """每只证券 ``<= signal_day`` 最近一个等效市值 ``close × adjfactor``。"""
-    frame = equivalent_market_value(bars)
-    window = frame.filter(pl.col(DATE_COL) <= signal_day).sort(
-        [INSTRUMENT_COL, DATE_COL]
-    )
-    if window.height == 0:
-        return {}
-    latest = window.group_by(INSTRUMENT_COL).agg(pl.col("equiv_mv").last())
-    return {
-        str(row[INSTRUMENT_COL]): float(row["equiv_mv"])
-        for row in latest.iter_rows(named=True)
-    }
-
-
-def _style_map(bars: pl.DataFrame, signal_day: date) -> dict[str, dict[str, float]]:
-    """每只证券 ``<= signal_day`` 最近一日的六风格暴露。"""
-    frame = compute_style_factors(bars)
-    window = frame.filter(pl.col(DATE_COL) <= signal_day).sort(
-        [INSTRUMENT_COL, DATE_COL]
-    )
-    if window.height == 0:
-        return {}
-    latest = window.group_by(INSTRUMENT_COL).agg(
-        [pl.col(name).last() for name in STYLE_FACTOR_NAMES]
-    )
-    return {
-        str(row[INSTRUMENT_COL]): {
-            name: float(row[name]) for name in STYLE_FACTOR_NAMES
-        }
-        for row in latest.iter_rows(named=True)
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -906,41 +872,11 @@ def _returns_frame(
 ) -> pl.DataFrame:
     """候选证券的日收益矩阵（列顺序与 ``instruments`` 一致）。
 
-    收益用后复权价 ``close × adjfactor`` 计算；缺失 / 非有限值填 0，候选证券在窗口内
-    完全没有行情时整列填 0，保证优化器拿到的矩阵始终有限。
+    口径与 :func:`quant.portfolio.enhanced_inputs.returns_matrix` 一致。
     """
-    window = bars.filter(
-        (pl.col(DATE_COL) <= ref_date) & pl.col(INSTRUMENT_COL).is_in(list(instruments))
-    ).sort([INSTRUMENT_COL, DATE_COL])
-    window = window.with_columns(
-        (pl.col("close") * pl.col("adjfactor")).alias("_adj_close")
-    ).with_columns(
-        pl.when(
-            (pl.col("_adj_close").shift(1).over(INSTRUMENT_COL) > 0)
-            & pl.col("_adj_close").is_finite()
-        )
-        .then(
-            pl.col("_adj_close")
-            / pl.col("_adj_close").shift(1).over(INSTRUMENT_COL)
-            - 1.0
-        )
-        .otherwise(None)
-        .alias("_ret")
+    return returns_matrix(
+        bars, instruments, ref_date, window=RETURNS_WINDOW_DEFAULT
     )
-    pivot = window.pivot(on=INSTRUMENT_COL, index=DATE_COL, values="_ret")
-    for instrument in instruments:
-        if instrument not in pivot.columns:
-            pivot = pivot.with_columns(pl.lit(0.0).alias(instrument))
-    cleaned = pivot.select(list(instruments)).with_columns(
-        [
-            pl.when(pl.col(instrument).is_finite())
-            .then(pl.col(instrument))
-            .otherwise(0.0)
-            .alias(instrument)
-            for instrument in instruments
-        ]
-    )
-    return cleaned.tail(RETURNS_WINDOW_DEFAULT)
 
 
 def _enrich_orders(

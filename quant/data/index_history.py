@@ -285,7 +285,7 @@ def float_mv_weights_on(
     ``(instrument, weight)`` 与剔除清单（``instrument`` 单列）。全部票无有效市值时
     返回空权重表。
     """
-    empty_w = pl.DataFrame({"instrument": pl.String, "weight": pl.Float64})
+    empty_w = pl.DataFrame(schema={"instrument": pl.String, "weight": pl.Float64})
     members = members.select("instrument").unique()
     mv = float_mv.filter(pl.col("date") == day).select("instrument", "float_mv")
     joined = members.join(mv, on="instrument", how="left")
