@@ -25,12 +25,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import polars as pl  # noqa: E402
-
 from quant.automl.dataset import (  # noqa: E402
-    LABEL_COL,
     build_dataset,
 )
+from quant.automl.importance import make_importance_fn  # noqa: E402
 from quant.automl.trainer import (  # noqa: E402
     DEFAULT_PRESETS,
     DEFAULT_TIME_LIMIT,
@@ -64,9 +62,6 @@ DEFAULT_DATA_DIR: str = "data"
 DEFAULT_OUTPUT_DIR: str = "runs/model_eval"
 DEFAULT_MODELS_DIR: str = "runs/automl/walkforward"
 
-#: 因子重要性置换计算使用的样本行数。
-IMPORTANCE_ROWS: int = 2000
-
 #: leaderboard 打印行数。
 LEADERBOARD_ROWS: int = 10
 
@@ -74,45 +69,6 @@ LEADERBOARD_ROWS: int = 10
 # ---------------------------------------------------------------------------
 # AutoGluon 钩子（importance_fn / leaderboard_fn）
 # ---------------------------------------------------------------------------
-
-
-def make_importance_fn(
-    feature_columns: list[str], rows: int = IMPORTANCE_ROWS
-):
-    """返回逐窗口因子重要性钩子：AutoGluon 置换重要性，取训练集前 ``rows`` 行。"""
-
-    def importance_fn(
-        trainer: ModelTrainer, train_df: pl.DataFrame
-    ) -> pl.DataFrame | None:
-        predictor = getattr(trainer, "predictor", None)
-        if predictor is None:
-            return None
-        sample = (
-            train_df.select(*feature_columns, LABEL_COL)
-            .drop_nulls(LABEL_COL)
-            .head(rows)
-        )
-        if sample.height < 2:
-            return None
-        try:
-            importance = predictor.feature_importance(sample.to_pandas(), silent=True)
-        except Exception as exc:  # noqa: BLE001 - 重要性失败不拖垮评估
-            logger.warning("window 因子重要性不可用：%s", exc)
-            return None
-        try:
-            return pl.DataFrame(
-                {
-                    "feature": [str(name) for name in importance.index],
-                    "importance": [
-                        float(value) for value in importance["importance"]
-                    ],
-                }
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("window 因子重要性解析失败：%s", exc)
-            return None
-
-    return importance_fn
 
 
 def leaderboard_fn(trainer: ModelTrainer) -> str | None:
