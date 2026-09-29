@@ -88,8 +88,12 @@ logger = logging.getLogger(__name__)
 
 #: 主板非 ST 涨跌幅比例。
 MAIN_LIMIT_RATIO: float = 0.10
-#: 主板 ST 涨跌幅比例。
+#: 主板 ST 涨跌幅比例，仅适用于 :data:`MAIN_ST_UNIFY_DATE` 之前。
 MAIN_ST_LIMIT_RATIO: float = 0.05
+#: 主板 ST 涨跌幅并入 10% 的日期：交易所规则变更，2026-07-03 是最后一个按 5%
+#: 执行的交易日，2026-07-06（周一）起沪深主板 ST 与非 ST 同为 10%
+#: （CSMAR 全市场逐日执行数据实证，issue #59 交叉验证）。
+MAIN_ST_UNIFY_DATE: date = date(2026, 7, 6)
 #: 创业板放开后的涨跌幅比例（含改革后的 ST）。
 CYB_LIMIT_RATIO: float = 0.20
 #: 创业板注册制改革生效日：2020-08-24 起涨跌幅由 10% 放宽到 20%。
@@ -134,6 +138,8 @@ def limit_ratio(board: str, day: date, is_st: bool) -> float:
     """返回指定板块 / 日期 / ST 状态下的涨跌幅比例。
 
     与 :func:`compute_limits` 向量化实现共用同一张规则表，测试保证二者一致。
+    主板 ST 的 5% 带只用到 :data:`MAIN_ST_UNIFY_DATE` 之前，此后主板 ST 与
+    非 ST 同为 10%。
     """
     if board == "kcb":
         return KCB_LIMIT_RATIO
@@ -141,7 +147,9 @@ def limit_ratio(board: str, day: date, is_st: bool) -> float:
         return BJ_LIMIT_RATIO
     if board == "cyb" and day >= CYB_REFORM_DATE:
         return CYB_LIMIT_RATIO
-    return MAIN_ST_LIMIT_RATIO if is_st else MAIN_LIMIT_RATIO
+    if is_st and day < MAIN_ST_UNIFY_DATE:
+        return MAIN_ST_LIMIT_RATIO
+    return MAIN_LIMIT_RATIO
 
 
 def is_st_name(name: str | None) -> bool:
@@ -431,13 +439,15 @@ def compute_limits(
         .alias("prev_close")
     )
 
-    pre_reform_ratio = (
-        pl.when(is_st).then(MAIN_ST_LIMIT_RATIO).otherwise(MAIN_LIMIT_RATIO)
+    main_ratio = (
+        pl.when(is_st & (pl.col("date") < MAIN_ST_UNIFY_DATE))
+        .then(MAIN_ST_LIMIT_RATIO)
+        .otherwise(MAIN_LIMIT_RATIO)
     )
     cyb_ratio = (
         pl.when(pl.col("date") >= CYB_REFORM_DATE)
         .then(CYB_LIMIT_RATIO)
-        .otherwise(pre_reform_ratio)
+        .otherwise(main_ratio)
     )
     ratio = (
         pl.when(board == "kcb")
@@ -446,7 +456,7 @@ def compute_limits(
         .then(BJ_LIMIT_RATIO)
         .when(board == "cyb")
         .then(cyb_ratio)
-        .otherwise(pre_reform_ratio)
+        .otherwise(main_ratio)
         .alias("ratio")
     )
     out = out.with_columns(ratio)
