@@ -10,6 +10,9 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import math
+import os
+import subprocess
+import sys
 import types
 from pathlib import Path
 from typing import Any
@@ -514,3 +517,34 @@ def test_cli_missing_registry_returns_registry_error(
 
     assert code == 2
     assert "registry 不可用" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# 循环导入回归
+# ---------------------------------------------------------------------------
+
+
+def test_eval_factor_imports_from_clean_interpreter() -> None:
+    """回归（issue #106）：``quant.eval.factor`` 作为首个 import 不得循环导入失败。
+
+    干净解释器里 ``import quant.eval.factor`` 会经 ``quant.factor_lib`` 触达
+    ``prune``；prune 旧版在模块导入期依赖 ``quant.eval.factor.MAX_CORR_REJECT``，
+    此时 factor 只初始化了一半，抛 partially initialized ImportError。全套件测试
+    因导入顺序掩盖了它，故这里单起子进程复现。
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        str(repo_root) if not existing else os.pathsep.join([str(repo_root), existing])
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import quant.eval.factor"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr

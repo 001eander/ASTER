@@ -7,7 +7,7 @@
 
 1. **聚簇降级**：对库内全部 pool 因子两两算逐日截面相关的时间序列均值
    （:func:`quant.factor_lib.correlation.cross_section_corr`），``|corr|``
-   严格大于 :data:`CLUSTER_CORR_THRESHOLD`（复用入库查重阈值
+   严格大于 :func:`cluster_corr_threshold`（复用入库查重阈值
    :data:`quant.eval.factor.MAX_CORR_REJECT`，不另造数值）的因子连边，
    连通分量为一个簇。每个簇只留质量最高的一个，其余降级进 graveyard。
    负相关同样入簇（绝对值口径），与入库查重的语义一致。
@@ -45,7 +45,6 @@ from dataclasses import dataclass, replace
 
 import polars as pl
 
-from quant.eval.factor import MAX_CORR_REJECT
 from quant.factor_lib.correlation import cross_section_corr
 from quant.factor_lib.registry import pool_factors
 from quant.factor_lib.schema import (
@@ -59,9 +58,6 @@ from quant.factor_lib.schema import (
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
-
-#: 聚簇相关性阈值：``|corr|`` 严格大于此值即连边。与入库查重共用同一口径。
-CLUSTER_CORR_THRESHOLD: float = MAX_CORR_REJECT
 
 #: 容量上限比例：pool 因子数 ≤ ``floor(库内总条目数 × 此值)``。
 CAPACITY_RATIO: float = 0.5
@@ -77,6 +73,18 @@ RANK_IC_KEY: str = "rank_ic"
 
 #: 质量排序的次级指标键。
 ICIR_KEY: str = "icir"
+
+
+def cluster_corr_threshold() -> float:
+    """聚簇相关性阈值：``|corr|`` 严格大于此值即连边，与入库查重共用同一口径。
+
+    阈值数值只在 :data:`quant.eval.factor.MAX_CORR_REJECT` 定义一次。这里惰性
+    import，避免 ``quant.factor_lib.prune`` 在模块导入期反向依赖
+    ``quant.eval.factor``（后者又经 ``quant.factor_lib`` 触达本模块）造成的循环导入。
+    """
+    from quant.eval.factor import MAX_CORR_REJECT
+
+    return MAX_CORR_REJECT
 
 
 # ---------------------------------------------------------------------------
@@ -201,9 +209,14 @@ def _cluster_members(
     factor_ids: list[str],
     matrix: Mapping[tuple[str, str], float],
     *,
-    threshold: float = CLUSTER_CORR_THRESHOLD,
+    threshold: float | None = None,
 ) -> list[tuple[str, ...]]:
-    """按 ``|corr| > threshold`` 连边取连通分量，返回按最小 id 排序的簇列表。"""
+    """按 ``|corr| > threshold`` 连边取连通分量，返回按最小 id 排序的簇列表。
+
+    ``threshold`` 为 None 时取 :func:`cluster_corr_threshold`。
+    """
+    if threshold is None:
+        threshold = cluster_corr_threshold()
     parent: dict[str, str] = {factor_id: factor_id for factor_id in factor_ids}
 
     def find(node: str) -> str:
@@ -307,7 +320,6 @@ def prune(registry: Registry, values: Mapping[str, pl.DataFrame]) -> PruneResult
 
 __all__ = [
     "CAPACITY_RATIO",
-    "CLUSTER_CORR_THRESHOLD",
     "ICIR_KEY",
     "RANK_IC_KEY",
     "REASON_CAPACITY",
@@ -318,6 +330,7 @@ __all__ = [
     "apply_prune",
     "build_corr_matrix",
     "capacity_limit",
+    "cluster_corr_threshold",
     "plan_prune",
     "prune",
     "quality_key",
