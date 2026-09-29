@@ -170,7 +170,17 @@ async function statusCommand(args: Map<string, string | boolean>): Promise<void>
 }
 
 function openBrowser(url: string): void {
-  spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+  // 跨平台打开浏览器；打不开不影响主流程（仅状态页入口）。
+  const command =
+    process.platform === "darwin"
+      ? "open"
+      : process.platform === "win32"
+        ? "rundll32"
+        : "xdg-open";
+  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+  const child = spawn(command, args, { stdio: "ignore", detached: true });
+  child.on("error", () => {});
+  child.unref();
 }
 
 async function readJson<T>(file: string): Promise<T | undefined> {

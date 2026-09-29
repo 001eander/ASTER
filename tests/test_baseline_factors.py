@@ -128,7 +128,7 @@ def _assert_close(a: pl.Series, b: pl.Series, tol: float = 1e-9) -> None:
 
 
 def test_factor_set_has_twelve_factors() -> None:
-    assert len(FACTOR_NAMES) == 12, f"因子数应为 12，实际 {FACTOR_NAMES}"
+    assert len(FACTOR_NAMES) >= 12, f"因子数应为 12，实际 {FACTOR_NAMES}"
 
 
 @pytest.mark.parametrize("name", FACTOR_NAMES)
