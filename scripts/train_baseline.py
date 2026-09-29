@@ -347,7 +347,7 @@ def train_baseline(
             end=end.isoformat() if end is not None else None,
             n_rows=summary.kept_rows,
             feature_columns=list(summary.feature_columns),
-            presets=active.presets,
+            presets=str(getattr(active, "presets", presets)),
             time_limit=float(time_limit),
             horizon=horizon,
             max_rows=max_rows,
