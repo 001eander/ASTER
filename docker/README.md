@@ -2,7 +2,14 @@
 
 `factor-eval.Dockerfile` 构建 `aster-factor-eval` 镜像，供 hyra-pi 内循环沙盒使用：
 Python 3.12 + polars / pyarrow / numpy / radon（版本与 uv.lock 对齐），`quant/` 包打在
-`/app` 并设好 `PYTHONPATH`。镜像不含数据、不含 akshare / autogluon / torch。
+`/app` 并设好 `PYTHONPATH`；`factor_library/` 一并打入 `/app/factor_library`（只读），
+供相关性查重加载库内 pool 因子。镜像不含数据、不含 akshare / autogluon / torch。
+
+改动 `factor_library/` 后需重建镜像才会生效：
+
+```bash
+docker build -f docker/factor-eval.Dockerfile -t aster-factor-eval .
+```
 
 ## 构建
 
