@@ -66,6 +66,7 @@ from quant.daily.virtual_account import (
     DEFAULT_INITIAL_CASH,
     VirtualAccount,
 )
+from quant.factor_lib import load_registry, pool_factors, registry_path
 from quant.portfolio.enhanced import (
     STATUS_HELD,
     STATUS_RELAXED,
@@ -320,11 +321,40 @@ def filter_executable(
 # ---------------------------------------------------------------------------
 
 
-def discover_factors(factor_library_dir: str | Path) -> dict[str, FactorCompute]:
-    """动态加载因子库下全部 ``*.py``，返回有序 ``{因子名: compute}``。
+def _registry_factor_names(root: Path) -> list[str]:
+    """按 registry 挑出参与建模的因子名。
 
-    文件名即因子名，忽略下划线开头的文件。导入前把因子库父目录加入 ``sys.path``，
-    使 ``importlib`` 能按包路径加载。
+    条件：``status == "pool"`` 且 ``code_path`` 指向的 ``.py`` 存在。
+    ``code_path`` 相对路径按仓库根（因子库父目录）解析，文件名 stem 即因子名。
+    """
+    registry = load_registry(root)
+    names: list[str] = []
+    seen: set[str] = set()
+    for entry in pool_factors(registry):
+        code_path = Path(entry.code_path)
+        if not code_path.is_absolute():
+            code_path = root.parent / code_path
+        if not code_path.is_file():
+            logger.warning("registry 条目的因子文件缺失，跳过：%s", code_path)
+            continue
+        name = code_path.stem
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def discover_factors(factor_library_dir: str | Path) -> dict[str, FactorCompute]:
+    """加载因子库，返回有序 ``{因子名: compute}``。
+
+    registry 模式（``factor_library_dir/registry.json`` 存在）：只加载
+    ``status == "pool"`` 且 ``code_path`` 指向的 ``.py`` 存在的条目，
+    graveyard 因子留在库里但不参与建模。文件名即因子名，``compute`` 仍取自模块。
+
+    兼容模式（registry 缺失）：沿用目录扫描，加载全部 ``*.py``，忽略下划线
+    开头的文件。导入前把因子库父目录加入 ``sys.path``，使 ``importlib`` 能按
+    包路径加载。
     """
     root = Path(factor_library_dir)
     if not root.is_dir():
@@ -332,11 +362,18 @@ def discover_factors(factor_library_dir: str | Path) -> dict[str, FactorCompute]
     parent = str(root.resolve().parent)
     if parent not in sys.path:
         sys.path.insert(0, parent)
+
+    if registry_path(root).is_file():
+        names = _registry_factor_names(root)
+    else:
+        names = [
+            path.stem
+            for path in sorted(root.glob("*.py"))
+            if not path.stem.startswith("_")
+        ]
+
     mapping: dict[str, FactorCompute] = {}
-    for path in sorted(root.glob("*.py")):
-        name = path.stem
-        if name.startswith("_"):
-            continue
+    for name in names:
         module = importlib.import_module(f"{root.name}.{name}")
         compute = getattr(module, "compute", None)
         if compute is None or not callable(compute):

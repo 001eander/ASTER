@@ -17,6 +17,38 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 
 本期为 Alpha158 风格手工基线因子集（M1 基线 + 给 Agent 的示范）。
 
+## 注册表 registry.json
+
+`registry.json` 是因子集与元数据的唯一真源，把此前的「目录即真源」换成
+「registry 即真源」：因子库的成员、经济假设、评估指标、方向标签与血统链都记在
+这份文件里，不再靠扫描目录隐式决定。
+
+`quant/daily/pipeline.discover_factors` 在注册表存在时，只加载 `status == "pool"`
+且 `code_path` 指向的 `.py` 存在的条目；graveyard 因子留在库里但不参与建模。
+注册表缺失才回退为扫描目录（兼容旧跑批）。读写与校验见 `quant/factor_lib/`。
+
+顶层 `{"version": 1, "factors": [...]}`，条目字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `factor_id` | str | 因子唯一标识，种子因子取文件名 stem |
+| `hypothesis` | str | 经济假设一句话 |
+| `code_path` | str | 相对仓库根的 `.py` 路径 |
+| `metrics` | dict | `rank_ic` / `icir` / `max_corr` 等，未评估填 `null` |
+| `direction` | dict | `signal_source` / `time_scale` / `mechanism`，均为非空字符串 |
+| `lineage` | dict | `op` / `parents` / `run_id`（可空）/ `generation` |
+| `status` | str | `pool`（参与建模）或 `graveyard`（淘汰，留库不建模） |
+
+`direction` 为依据因子类别做的 best-effort 结构化标签：`signal_source` 取
+`price` / `volume` / `price_volume`；`time_scale` 按最长窗口推断，`short` ≤ 10、
+`medium` ≤ 30、`long` > 30；`mechanism` 记经济机制，目前用到 `momentum` /
+`reversal` / `volatility` / `ma_bias` / `volume_ratio` / `price_volume_corr` /
+`liquidity` / `range` / `vwap_bias`。
+
+`lineage.op` 取 `seed` / `mutation` / `crossover`。种子因子为
+`{"op": "seed", "parents": [], "run_id": null, "generation": 0}`，自动挖掘产出的
+因子填写父因子 id、产出 run 与代数。
+
 ## 因子清单
 
 | 因子 | 类别 | 经济假设 | 窗口 | 使用字段 |

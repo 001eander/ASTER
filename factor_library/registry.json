@@ -1,0 +1,291 @@
+{
+  "version": 1,
+  "factors": [
+    {
+      "factor_id": "mom_5",
+      "hypothesis": "过去 5 日复权收盘涨幅短期延续",
+      "code_path": "factor_library/mom_5.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "short",
+        "mechanism": "momentum"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "mom_20",
+      "hypothesis": "过去 20 日复权收盘涨幅中期延续",
+      "code_path": "factor_library/mom_20.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "momentum"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "reversal_5",
+      "hypothesis": "5 日开盘涨幅过度反应后回落（开盘口径，区别于 mom）",
+      "code_path": "factor_library/reversal_5.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "short",
+        "mechanism": "reversal"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "vol_ratio_5",
+      "hypothesis": "短期均量 / 长期均量放大代表关注度抬升",
+      "code_path": "factor_library/vol_ratio_5.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "long",
+        "mechanism": "volume_ratio"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "turnover_proxy",
+      "hypothesis": "成交额相对自身近期均值放大代表换手活跃度上升",
+      "code_path": "factor_library/turnover_proxy.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "liquidity"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "price_volume_corr_10",
+      "hypothesis": "复权收盘与成交量的 10 日时序相关，度量量价配合",
+      "code_path": "factor_library/price_volume_corr_10.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "short",
+        "mechanism": "price_volume_corr"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "volatility_20",
+      "hypothesis": "20 日日收益标准差，高波动对应低风险调整收益",
+      "code_path": "factor_library/volatility_20.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "volatility"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "max_drawdown_20",
+      "hypothesis": "相对 20 日高点的回撤，越深越看空",
+      "code_path": "factor_library/max_drawdown_20.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "volatility"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "ma_bias_10",
+      "hypothesis": "收盘对 10 日均线偏离，过大则回归",
+      "code_path": "factor_library/ma_bias_10.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "short",
+        "mechanism": "ma_bias"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "ma_bias_20",
+      "hypothesis": "收盘对 20 日均线偏离，过大则回归",
+      "code_path": "factor_library/ma_bias_20.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "ma_bias"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "range_pct",
+      "hypothesis": "日内相对振幅的 10 日均值，度量震荡强度",
+      "code_path": "factor_library/range_pct.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "short",
+        "mechanism": "range"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "vwap_bias",
+      "hypothesis": "收盘对当日 VWAP 的偏离，度量日内资金强弱",
+      "code_path": "factor_library/vwap_bias.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "short",
+        "mechanism": "vwap_bias"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "vol_ratio_5_20_neg",
+      "hypothesis": "5/20 日均量比取负，缩量做多（M2 内循环冒烟首个入库因子）",
+      "code_path": "factor_library/vol_ratio_5_20_neg.py",
+      "metrics": {
+        "rank_ic": null,
+        "icir": null,
+        "max_corr": null
+      },
+      "direction": {
+        "signal_source": "volume",
+        "time_scale": "medium",
+        "mechanism": "liquidity"
+      },
+      "lineage": {
+        "op": "seed",
+        "parents": [],
+        "run_id": null,
+        "generation": 0
+      },
+      "status": "pool"
+    }
+  ]
+}
