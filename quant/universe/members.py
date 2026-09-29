@@ -195,12 +195,45 @@ def members_range(
     return frame.unique().sort([DATE_COLUMN, INSTRUMENT_COLUMN]).cast(OUTPUT_SCHEMA)
 
 
+def filter_bars_to_universe(
+    bars: pl.DataFrame,
+    name_or_path: str,
+    *,
+    data_dir: Path = Path("data"),
+) -> pl.DataFrame:
+    """按池内 PIT 成员裁剪行情长表，保留 ``(date, instrument)`` 在池内的行。
+
+    池内区间取行情表自己的 ``[min(date), max(date)]``，逐日匹配成员（无前视）。
+    池在该区间没有记录时返回零行同 schema 表。列顺序与排序保持输入原样。
+    """
+    if bars.height == 0:
+        return bars
+    membership = members_range(
+        name_or_path,
+        bars[DATE_COLUMN].min(),
+        bars[DATE_COLUMN].max(),
+        data_dir=data_dir,
+    )
+    return bars.join(
+        membership, on=[DATE_COLUMN, INSTRUMENT_COLUMN], how="semi"
+    )
+
+
+def mean_daily_instruments(bars: pl.DataFrame) -> float:
+    """行情长表的日均证券数（按 ``date`` 分组后的行数均值）；空表返回 0.0。"""
+    if bars.height == 0:
+        return 0.0
+    return float(bars.group_by(DATE_COLUMN).len()["len"].mean())
+
+
 __all__ = [
     "INDEX_MEMBERS_FILE",
     "NAMED_UNIVERSES",
     "OUTPUT_SCHEMA",
     "SUPPORTED_SUFFIXES",
     "UniverseError",
+    "filter_bars_to_universe",
+    "mean_daily_instruments",
     "members",
     "members_range",
 ]

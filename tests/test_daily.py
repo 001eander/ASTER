@@ -6,8 +6,10 @@ industry），以便跑批前的 :func:`quant.data.validate.validate` 正常通�
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import polars as pl
@@ -16,6 +18,7 @@ import pytest
 from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
+    INDEX_WEIGHTS,
     INDUSTRY,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
@@ -27,8 +30,9 @@ from quant.daily.pipeline import (
     resolve_reference_date,
     run_daily,
 )
+from quant.daily.strategy import STRATEGY_INDEX_ENHANCED, StrategyConfig
 from quant.daily.virtual_account import ActualFill, VirtualAccount
-from quant.portfolio.optimizer import PortfolioOptimizer
+from quant.portfolio.optimizer import OptimizeResult, PortfolioOptimizer
 
 FACTOR_LIBRARY = Path(__file__).resolve().parents[1] / "factor_library"
 
@@ -134,6 +138,29 @@ def _write_data_dir(
         chunk = bars.filter(pl.col("date").dt.year() == year)
         chunk.write_parquet(data_dir / "bars" / f"{int(year):04d}.parquet")
     return data_dir, instruments, days
+
+
+def _write_index_weights(
+    data_dir: Path,
+    day: date,
+    instruments: list[str],
+    *,
+    code: str = "000905",
+) -> None:
+    """写一份日频指数权重（等权），供指增路径读基准。"""
+    share = 1.0 / len(instruments)
+    rows = [
+        {
+            "date": day,
+            "instrument": instrument,
+            "index_code": code,
+            "weight": share,
+        }
+        for instrument in instruments
+    ]
+    pl.DataFrame(rows, schema=INDEX_WEIGHTS).write_parquet(
+        data_dir / "index_weights.parquet"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +453,124 @@ def test_run_daily_hold_fallback_when_still_infeasible(
         VirtualAccount.path_for(tmp_path / "account", "default")
     )
     assert account.last_pipeline_date == report.date
+
+
+# ---------------------------------------------------------------------------
+# 策略分派
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _RecordingOptimizer:
+    """记录候选集并返回等权解的假 stock optimizer。"""
+
+    calls: list[list[str]] = field(default_factory=list)
+    w_max: float = 0.05
+    max_turnover: float = 0.30
+
+    def optimize(
+        self,
+        alpha: Any,
+        instruments: Any,
+        returns: Any,
+        w_prev: Any = None,
+        **kwargs: Any,
+    ) -> OptimizeResult:
+        candidates = list(instruments)
+        self.calls.append(candidates)
+        share = 1.0 / len(candidates)
+        return OptimizeResult(
+            weights={instrument: share for instrument in candidates},
+            objective=0.0,
+            turnover=1.0,
+            status="optimal",
+        )
+
+
+class _FakeEnhancedOptimizer:
+    """记录 ``optimize_day`` 入参并返回等权解的假指增优化器。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def optimize_day(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        instruments = list(kwargs["instruments"])
+        share = 1.0 / len(instruments)
+        return SimpleNamespace(
+            weights={instrument: share for instrument in instruments},
+            status="optimal",
+            turnover=1.0,
+            objective=0.0,
+        )
+
+
+def test_run_daily_stock_selection_strategy_config(
+    tmp_path: Path, fake_trainer: type[_FakeTrainer]
+) -> None:
+    """stock_selection 配置走假 optimizer，候选数受 top_k 限制。"""
+    data_dir, instruments, days = _write_data_dir(tmp_path)
+    fake_trainer.score_map = _score_map(instruments)
+    recorder = _RecordingOptimizer()
+    config = StrategyConfig(strategy="stock_selection", top_k=5)
+
+    report = run_daily(
+        data_dir,
+        tmp_path / "model",
+        factor_library_dir=FACTOR_LIBRARY,
+        account_dir=tmp_path / "account",
+        orders_dir=tmp_path / "orders",
+        reports_dir=tmp_path / "reports",
+        initial_cash=1_000_000.0,
+        strategy_config=config,
+        optimizer=recorder,
+    )
+
+    assert report.strategy == "stock_selection"
+    assert report.universe is None
+    assert recorder.calls, "注入的 optimizer 必须被调用"
+    assert len(recorder.calls[0]) == 5  # top_k ∪ 空持仓
+    assert report.n_candidates == 5
+    assert report.orders.height > 0
+
+
+def test_run_daily_index_enhanced_strategy_config(
+    tmp_path: Path, fake_trainer: type[_FakeTrainer]
+) -> None:
+    """index_enhanced 配置走假 enhanced optimizer，基准成分进候选集。"""
+    data_dir, instruments, days = _write_data_dir(tmp_path)
+    fake_trainer.score_map = _score_map(instruments)
+    bench = instruments[:10]
+    _write_index_weights(data_dir, days[-1], bench, code="000905")
+    enhanced = _FakeEnhancedOptimizer()
+    config = StrategyConfig(
+        strategy=STRATEGY_INDEX_ENHANCED,
+        benchmark="000905",
+        top_k=5,
+        rebalance_freq="D",
+    )
+
+    report = run_daily(
+        data_dir,
+        tmp_path / "model",
+        factor_library_dir=FACTOR_LIBRARY,
+        account_dir=tmp_path / "account",
+        orders_dir=tmp_path / "orders",
+        reports_dir=tmp_path / "reports",
+        initial_cash=1_000_000.0,
+        strategy_config=config,
+        enhanced_optimizer=enhanced,
+    )
+
+    assert report.strategy == STRATEGY_INDEX_ENHANCED
+    assert report.benchmark == "000905"
+    assert report.rebalance_freq == "D"
+    assert enhanced.calls, "注入的 enhanced optimizer 必须被调用"
+    kwargs = enhanced.calls[0]
+    assert set(kwargs["bench_weights"]) == set(bench)
+    assert set(bench) <= set(kwargs["instruments"])
+    assert kwargs["w_prev"] is None
+    assert report.orders.height > 0
 
 
 # ---------------------------------------------------------------------------

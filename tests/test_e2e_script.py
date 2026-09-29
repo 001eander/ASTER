@@ -26,6 +26,7 @@ from quant.data.schema import (
     CORPORATE_ACTIONS,
     DAILY_BARS,
     INDEX_BARS,
+    INDEX_MEMBERS,
     INSTRUMENT_INFO,
     TRADE_CALENDAR,
 )
@@ -144,6 +145,23 @@ def _write_index_bars(
     pl.DataFrame(rows, schema=INDEX_BARS).write_parquet(data_dir / "index_bars.parquet")
 
 
+def _write_index_members(
+    data_dir: Path,
+    days: list[date],
+    instruments: list[str],
+    code: str = "000300",
+) -> None:
+    """写一份命名池成分表：``code`` 在每天都包含 ``instruments``。"""
+    rows = [
+        {"date": day, "instrument": instrument, "index_code": code}
+        for day in days
+        for instrument in instruments
+    ]
+    pl.DataFrame(rows, schema=INDEX_MEMBERS).write_parquet(
+        data_dir / "index_members.parquet"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 假 trainer / 假 optimizer
 # ---------------------------------------------------------------------------
@@ -226,6 +244,7 @@ def _write_train_config(
     start: date | None = None,
     end: date | None = None,
     n_rows: int = 0,
+    universe: str | None = None,
 ) -> Path:
     path = tb.default_train_config_path(model_dir)
     tb.write_train_config(
@@ -240,6 +259,7 @@ def _write_train_config(
             time_limit=60.0,
             horizon=1,
             max_rows=0,
+            universe=universe,
         ),
     )
     return path
@@ -351,6 +371,34 @@ def test_train_baseline_invokes_trainer_and_writes_config(tmp_path: Path) -> Non
     assert loaded.time_limit == pytest.approx(42.0)
     assert loaded.start == days[5].isoformat()
     assert loaded.end == days[-1].isoformat()
+    assert loaded.universe is None
+
+
+def test_train_baseline_universe_filters_and_records(tmp_path: Path) -> None:
+    """``--universe`` 把行情裁到池内，训练配置记录池名，报告记录池内日均票数。"""
+    data_dir, instruments, days = _write_data_dir(tmp_path)
+    _write_index_members(data_dir, days, instruments[:3])
+    model_dir = tmp_path / "model"
+    trainer = _RecordingTrainer()
+
+    report = tb.train_baseline(
+        data_dir,
+        model_dir,
+        factor_library_dir=FACTOR_LIBRARY,
+        start=days[5],
+        end=days[-1],
+        time_limit=5.0,
+        trainer=trainer,
+        universe="hs300",
+    )
+
+    assert report.summary.universe == "hs300"
+    assert report.summary.mean_daily_instruments == pytest.approx(3.0)
+    assert report.summary.n_instruments == 3
+    assert trainer.rows == report.summary.kept_rows > 0
+
+    loaded = tb.load_train_config(report.config_path)
+    assert loaded.universe == "hs300"
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +508,50 @@ def test_run_e2e_missing_config_without_trainer_raises(tmp_path: Path) -> None:
     config = _e2e_config(tmp_path, data_dir, days)
     with pytest.raises(e2e.E2EError, match="训练配置"):
         e2e.run_e2e(config)
+
+
+def test_run_e2e_universe_mismatch_raises(tmp_path: Path) -> None:
+    """训练配置有 universe 而回测没给 → 报错（训练在池内 z-score，不能混用）。"""
+    data_dir, instruments, days = _write_data_dir(tmp_path)
+    _write_index_members(data_dir, days, instruments[:3])
+    factors = tb.discover_factors(FACTOR_LIBRARY)
+    _write_train_config(
+        tmp_path / "model",
+        feature_columns=list(factors),
+        start=days[0],
+        end=days[-1],
+        universe="hs300",
+    )
+    config = _e2e_config(tmp_path, data_dir, days)  # universe 缺省 None
+
+    with pytest.raises(e2e.E2EError, match="universe"):
+        e2e.run_e2e(config, trainer=_FakeTrainer({}))
+
+
+def test_run_e2e_universe_filters_and_reports(tmp_path: Path) -> None:
+    """回测与训练同池时跑通，报告记录池内日均票数。"""
+    data_dir, instruments, days = _write_data_dir(tmp_path)
+    _write_index_members(data_dir, days, instruments[:3])
+    factors = tb.discover_factors(FACTOR_LIBRARY)
+    _write_train_config(
+        tmp_path / "model",
+        feature_columns=list(factors),
+        start=days[0],
+        end=days[-1],
+        universe="hs300",
+    )
+    config = replace(_e2e_config(tmp_path, data_dir, days), universe="hs300")
+    trainer = _FakeTrainer(_score_map(instruments))
+    optimizer = PortfolioOptimizer(w_max=0.5, max_turnover=0.30)
+
+    result = e2e.run_e2e(config, trainer=trainer, optimizer=optimizer)
+
+    assert result.result.fills, "池内回测应产生成交"
+    assert result.stats.calls > 0
+    report_text = result.report_path.read_text(encoding="utf-8")
+    assert "| universe | hs300 |" in report_text
+    assert "| universe_mean_daily_instruments | 3.00 |" in report_text
+    assert "| train.universe | hs300 |" in report_text
 
 
 def test_run_e2e_benchmark_wiring(tmp_path: Path) -> None:

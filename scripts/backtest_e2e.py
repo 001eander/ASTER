@@ -92,6 +92,10 @@ from quant.portfolio.optimizer import (  # noqa: E402
     PortfolioOptimizer,
 )
 from quant.portfolio.roundlot import round_weights_to_lots  # noqa: E402
+from quant.universe.members import (  # noqa: E402
+    filter_bars_to_universe,
+    mean_daily_instruments,
+)
 from scripts.train_baseline import (  # noqa: E402
     TrainConfig,
     default_train_config_path,
@@ -180,6 +184,8 @@ class E2EConfig:
     benchmark: str | None = None
     #: 是否额外产出持仓风险分析四表（``risk_report.md``，issue #69）。
     risk_report: bool = False
+    #: 回测股票池（命名池名或自定义池路径）；None 表示全市场。须与训练配置一致。
+    universe: str | None = None
 
     @property
     def resolved_train_config_path(self) -> Path:
@@ -505,6 +511,14 @@ def run_e2e(
     elif trainer is None:
         raise E2EError(f"缺少训练配置且未注入 trainer：{config_path}")
 
+    # -- 训练 / 回测股票池一致性：训练在池内做截面 z-score，回测必须同池 ----------
+    trained_universe = train_config.universe if train_config is not None else None
+    if trained_universe != config.universe:
+        raise E2EError(
+            f"训练配置 universe={trained_universe!r} 与回测 universe="
+            f"{config.universe!r} 不一致，请显式给出匹配的 --universe"
+        )
+
     # -- 行情窗口：start 之前留 lookback + 因子余量，供因子与收益矩阵预热 ----------
     calendar = load_calendar(config.data_dir)
     window_start = _window_start(
@@ -513,6 +527,11 @@ def run_e2e(
     bars = load_bars(config.data_dir, start=window_start, end=config.end)
     if bars.height == 0:
         raise E2EError(f"行情窗口 [{window_start}, {config.end}] 内没有数据")
+    if config.universe is not None:
+        bars = filter_bars_to_universe(bars, config.universe, data_dir=config.data_dir)
+        if bars.height == 0:
+            raise E2EError(f"股票池 {config.universe!r} 在窗口内没有行情")
+    universe_mean_daily = mean_daily_instruments(bars)
     actions = load_corporate_actions(
         config.data_dir, start=config.start, end=config.end
     )
@@ -579,6 +598,7 @@ def run_e2e(
         close_panel,
         benchmark_summary,
         benchmark_series,
+        universe_mean_daily,
     )
     holdings_path = config.out_dir / "holdings.parquet"
     holdings = build_holdings_weights(result, close_panel)
@@ -768,6 +788,7 @@ def _write_outputs(
     close_panel: pl.DataFrame,
     benchmark_summary: BenchmarkSummary | None = None,
     benchmark_series: pl.DataFrame | None = None,
+    universe_mean_daily: float = 0.0,
 ) -> tuple[Path, Path, Path, Path, Path | None]:
     out_dir = config.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -782,7 +803,15 @@ def _write_outputs(
         benchmark_series.write_parquet(benchmark_path)
     metrics = compute_metrics(result)
     report_path.write_text(
-        render_report(config, result, stats, metrics, train_config, benchmark_summary),
+        render_report(
+            config,
+            result,
+            stats,
+            metrics,
+            train_config,
+            benchmark_summary,
+            universe_mean_daily,
+        ),
         encoding="utf-8",
     )
     states_path.write_text(
@@ -829,6 +858,7 @@ def render_report(
     metrics: dict[str, Any],
     train_config: TrainConfig | None,
     benchmark: BenchmarkSummary | None = None,
+    universe_mean_daily: float = 0.0,
 ) -> str:
     """渲染 ``report.md``：头部配置 + 绩效（含基准 / 超额）+ 成交 / 拒单 / 公司行为统计。"""
     lines: list[str] = []
@@ -850,6 +880,11 @@ def render_report(
         ("top_k", str(config.top_k)),
         ("lookback_days", str(config.lookback_days)),
         ("benchmark", config.benchmark or "（未指定）"),
+        ("universe", config.universe or "（全市场）"),
+        (
+            "universe_mean_daily_instruments",
+            f"{universe_mean_daily:.2f}" if config.universe is not None else "-",
+        ),
         ("out_dir", str(config.out_dir)),
     ]
     if train_config is not None:
@@ -860,6 +895,7 @@ def render_report(
                 ("train.n_rows", str(train_config.n_rows)),
                 ("train.presets", train_config.presets),
                 ("train.time_limit", f"{train_config.time_limit:.0f}"),
+                ("train.universe", train_config.universe or "（全市场）"),
                 (
                     "train.feature_columns",
                     ", ".join(train_config.feature_columns),
@@ -1201,6 +1237,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="额外产出持仓风险分析四表 risk_report.md（issue #69）",
     )
+    parser.add_argument(
+        "--universe",
+        default=None,
+        help="股票池：命名池名（hs300/zz500/zz1000/zz2000）或自定义池文件路径；须与训练一致",
+    )
     return parser
 
 
@@ -1269,6 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
         train_config_path=Path(args.train_config) if args.train_config else None,
         benchmark=args.benchmark,
         risk_report=args.risk_report,
+        universe=args.universe,
     )
     result = run_e2e(config)
     _print_summary(result)

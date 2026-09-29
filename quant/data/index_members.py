@@ -395,7 +395,11 @@ def read_index_members(data_dir: Path) -> pl.DataFrame:
 
 
 def read_index_weights(data_dir: Path) -> pl.DataFrame:
-    """读取日频 PIT 权重表（``index_weights.parquet``），缺失返回空表。"""
+    """读取日频指数权重表（``index_weights.parquet``），缺失返回空表。
+
+    与 :func:`read_anchor_weights` 的区别：本函数读的是锚间漂移后的日频表，
+    供指增基准权重按信号日 PIT 取值。
+    """
     path = _derived_weights_path(data_dir)
     if not path.exists():
         return pl.DataFrame(schema=INDEX_WEIGHTS)
@@ -405,6 +409,25 @@ def read_index_weights(data_dir: Path) -> pl.DataFrame:
         .cast(INDEX_WEIGHTS)
         .sort(["index_code", "date", "instrument"])
     )
+
+
+def index_weights_on(data_dir: Path, index_code: str, day: date) -> pl.DataFrame:
+    """取 ``index_code`` 在 ``<= day`` 的最近一个权重快照，列为 ``(instrument, weight)``。
+
+    表内没有该指数、或该指数没有不晚于 ``day`` 的记录时返回零行同 schema 表。
+    无前视：只用 ``date <= day`` 的权重。
+    """
+    empty = pl.DataFrame({"instrument": pl.String, "weight": pl.Float64})
+    weights = read_index_weights(data_dir)
+    if weights.height == 0:
+        return empty
+    subset = weights.filter(
+        (pl.col("index_code") == index_code) & (pl.col("date") <= day)
+    )
+    if subset.height == 0:
+        return empty
+    latest = subset["date"].max()
+    return subset.filter(pl.col("date") == latest).select("instrument", "weight")
 
 
 def read_drift_check(data_dir: Path) -> pl.DataFrame:
@@ -587,6 +610,7 @@ __all__ = [
     "build_daily_tables",
     "drift_weights",
     "expand_member_snapshots",
+    "index_weights_on",
     "read_anchor_weights",
     "read_drift_check",
     "read_index_members",

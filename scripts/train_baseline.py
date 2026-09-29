@@ -62,6 +62,10 @@ from quant.daily.pipeline import (  # noqa: E402
 )
 from quant.data.cache import load_bars  # noqa: E402
 from quant.labels.open_to_open import DEFAULT_HORIZON  # noqa: E402
+from quant.universe.members import (  # noqa: E402
+    filter_bars_to_universe,
+    mean_daily_instruments,
+)
 
 logger = logging.getLogger("train_baseline")
 
@@ -103,6 +107,8 @@ class TrainConfig:
     time_limit: float
     horizon: int
     max_rows: int
+    #: 训练所用的股票池（命名池名或自定义池路径）；``None`` 表示全市场。
+    universe: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -115,10 +121,12 @@ class TrainConfig:
             "time_limit": self.time_limit,
             "horizon": self.horizon,
             "max_rows": self.max_rows,
+            "universe": self.universe,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainConfig":
+        universe = data.get("universe")
         return cls(
             data_dir=str(data.get("data_dir", "")),
             start=data.get("start"),
@@ -129,6 +137,7 @@ class TrainConfig:
             time_limit=float(data.get("time_limit", DEFAULT_TIME_LIMIT)),
             horizon=int(data.get("horizon", DEFAULT_HORIZON)),
             max_rows=int(data.get("max_rows", 0)),
+            universe=None if universe is None else str(universe),
         )
 
 
@@ -173,6 +182,10 @@ class DatasetSummary:
     n_instruments: int
     feature_columns: tuple[str, ...]
     missing: pl.DataFrame = field(default_factory=pl.DataFrame)
+    #: 训练股票池（``None`` 全市场）。
+    universe: str | None = None
+    #: 池内日均票数（按交易日统计的证券数均值）。
+    mean_daily_instruments: float = 0.0
 
 
 def prepare_training_dataset(
@@ -263,11 +276,15 @@ def train_baseline(
     seed: int = SAMPLING_SEED,
     trainer: BaselineTrainer | None = None,
     config_path: str | Path | None = None,
+    universe: str | None = None,
 ) -> TrainReport:
     """跑完整训练链路并落盘模型与配置，返回 :class:`TrainReport`。
 
     ``trainer`` 用于依赖注入（测试传假 trainer，跳过真实 AutoGluon 训练）；省略时按
     参数构造 :class:`BaselineTrainer`。
+
+    ``universe`` 非空时，行情先按池内 PIT 成员裁剪再进 :func:`build_dataset`，因此
+    截面 z-score 只在池内计算（与全市场口径不同）；池名会写进训练配置，供回测校验。
     """
     started = time.monotonic()
     data_dir = Path(data_dir)
@@ -276,10 +293,19 @@ def train_baseline(
     if bars.height == 0:
         raise ValueError(f"行情窗口 [{start}, {end}] 内没有数据：{data_dir}")
 
+    if universe is not None:
+        bars = filter_bars_to_universe(bars, universe, data_dir=data_dir)
+        if bars.height == 0:
+            raise ValueError(
+                f"股票池 {universe!r} 在窗口 [{start}, {end}] 内没有行情"
+            )
+
     factors = discover_factors(factor_library_dir)
     dataset, summary = prepare_training_dataset(
         bars, factors, horizon=horizon, max_rows=max_rows, seed=seed
     )
+    summary.universe = universe
+    summary.mean_daily_instruments = mean_daily_instruments(bars)
     logger.info(
         "训练集：%d 行 / %d 只 / %d 个交易日（原始 %d 行，label 空 %d，全特征空 %d）",
         summary.kept_rows,
@@ -319,6 +345,7 @@ def train_baseline(
             time_limit=float(time_limit),
             horizon=horizon,
             max_rows=max_rows,
+            universe=universe,
         ),
     )
 
@@ -446,6 +473,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="训练配置 JSON 落盘路径，默认放 model-dir 同级",
     )
+    parser.add_argument(
+        "--universe",
+        default=None,
+        help="股票池：命名池名（hs300/zz500/zz1000/zz2000）或自定义池文件路径；缺省全市场",
+    )
     return parser
 
 
@@ -458,6 +490,10 @@ def _print_summary(report: TrainReport) -> None:
         f"训练集：{summary.kept_rows} 行 / {summary.n_instruments} 只 / "
         f"{summary.n_dates} 个交易日"
     )
+    if summary.universe is not None:
+        print(
+            f"股票池：{summary.universe}    池内日均票数 {summary.mean_daily_instruments:.2f}"
+        )
     print(
         f"丢弃：label 空 {summary.dropped_null_label} 行，"
         f"全特征空 {summary.dropped_all_null_feature} 行（原始 {summary.total_rows} 行）"
@@ -504,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         horizon=args.horizon,
         use_gpu=args.use_gpu,
         config_path=args.train_config,
+        universe=args.universe,
     )
     _print_summary(report)
     return 0
