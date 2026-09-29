@@ -23,12 +23,14 @@ function registryOf(
     mechanism: string;
     rankIc?: number | null;
     status?: string;
+    hypothesis?: string;
   }>,
 ): FactorRegistry {
   return {
     version: 1,
     factors: factors.map((factor) => ({
       factorId: factor.id,
+      hypothesis: factor.hypothesis ?? "",
       direction: {
         signal_source: factor.source,
         time_scale: factor.scale,
@@ -75,6 +77,7 @@ describe("loadFactorRegistry", () => {
         factors: [
           {
             factor_id: "a",
+            hypothesis: "过去 5 日复权涨幅有延续性",
             metrics: { rank_ic: 0.04 },
             direction: { signal_source: "price", time_scale: "short", mechanism: "momentum" },
             status: "pool",
@@ -92,8 +95,14 @@ describe("loadFactorRegistry", () => {
     );
     const registry = await loadFactorRegistry(root);
     expect(registry?.factors).toHaveLength(2);
-    expect(registry?.factors[0]).toMatchObject({ factorId: "a", rankIc: 0.04, status: "pool" });
+    expect(registry?.factors[0]).toMatchObject({
+      factorId: "a",
+      hypothesis: "过去 5 日复权涨幅有延续性",
+      rankIc: 0.04,
+      status: "pool",
+    });
     expect(registry?.factors[1]?.rankIc).toBeNull();
+    expect(registry?.factors[1]?.hypothesis).toBe("");
   });
 });
 

@@ -19,6 +19,7 @@ import {
   loadFactorRegistry,
   readQueueDirections,
 } from "./direction-map.js";
+import { buildPeerDigest, formatPeerDigest } from "./factor-digest.js";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const PROPOSAL_REVIEW_MIN_MS = 60_000;
@@ -102,9 +103,12 @@ export async function createPiProposal(opts: {
   model?: string;
   timeoutMs?: number;
   runDir: string;
+  // 因子库根目录，默认仓库根；单测可注入临时目录。
+  rootDir?: string;
 }): Promise<ProposalPort> {
   const sdk = await loadSdk();
   const system = await readFile(path.join(rootDir, "prompts", "proposal.md"), "utf8");
+  const registryRoot = opts.rootDir ?? rootDir;
   const roleModel = parseRoleModel(opts.model ?? DEFAULT_PROPOSAL_MODEL);
   const timeoutMs = opts.timeoutMs;
   return {
@@ -126,6 +130,10 @@ export async function createPiProposal(opts: {
           `灵感 ${inspiration.id}（经验库 v${inspiration.ebGeneration}）：${inspiration.direction}`,
           inspiration.context,
         ];
+        const digest = formatPeerDigest(
+          buildPeerDigest(await loadFactorRegistry(registryRoot), inspiration.direction),
+        );
+        if (digest) parts.push(digest);
         if (lastError) {
           parts.push(
             `上一轮崩溃了。先读 ${workDir} 里已有文件，只修这个错误，不要推倒重来。`,
