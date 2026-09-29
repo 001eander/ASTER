@@ -48,6 +48,13 @@ from quant.automl.dataset import (
     FactorCompute,
     build_dataset,
 )
+from quant.automl.rolling import (
+    DEFAULT_REGISTRY_DIR,
+    RollingConfig,
+    TrainerFactory,
+    TrainerLoader,
+    resolve_model,
+)
 from quant.automl.trainer import DEFAULT_MODEL_DIR, SCORE_COL, BaselineTrainer
 from quant.backtest.broker import PRICE_EPSILON
 from quant.data.cache import load_bars, load_calendar
@@ -368,6 +375,10 @@ def run_daily(
     enhanced_optimizer: EnhancedOptimizer | None = None,
     strategy_config: StrategyConfig | None = None,
     trainer: BaselineTrainer | None = None,
+    rolling_config: RollingConfig | None = None,
+    registry_dir: str | Path = DEFAULT_REGISTRY_DIR,
+    rolling_trainer_factory: TrainerFactory | None = None,
+    rolling_trainer_loader: TrainerLoader | None = None,
     initial_cash: float = DEFAULT_INITIAL_CASH,
     validate_data: bool = True,
     dry_run: bool = False,
@@ -381,6 +392,11 @@ def run_daily(
     给出后按配置的 ``strategy`` 分派：``stock_selection`` 仍走 PortfolioOptimizer，
     ``index_enhanced`` 走 :class:`~quant.portfolio.enhanced.EnhancedOptimizer`，候选集为
     基准成分 ∪ 打分为主 top-K ∪ 当前持仓。``universe`` 非空时打分先裁决到池内。
+
+    ``rolling_config`` 非空时启用滚动重训（issue #34）：按
+    :func:`quant.automl.rolling.resolve_model` 到期重训 / 复用注册表里的最近版本，
+    忽略 ``model_dir`` 静态模型；``dry_run=True`` 时只复用不重训。
+    ``rolling_trainer_factory`` / ``rolling_trainer_loader`` 为测试注入点。
     """
     data_dir = Path(data_dir)
     config = strategy_config if strategy_config is not None else StrategyConfig()
@@ -426,11 +442,39 @@ def run_daily(
 
     # -- 因子 → 模型打分 ---------------------------------------------------
     factors = discover_factors(factor_library_dir)
+    model_notes: list[str] = []
+    if rolling_config is not None:
+        resolved = resolve_model(
+            data_dir,
+            signal_day,
+            factors,
+            rolling_config,
+            registry_dir=registry_dir,
+            universe=config.universe,
+            trainer_factory=rolling_trainer_factory,
+            trainer_loader=rolling_trainer_loader,
+            no_train=dry_run,
+        )
+        active_trainer = resolved.trainer
+        if resolved.action == "retrained" and resolved.meta is not None:
+            model_notes.append(
+                f"模型滚动重训：v_{resolved.train_end.isoformat()}（训练区间 "
+                f"{resolved.meta.train_start.isoformat()} ~ "
+                f"{resolved.meta.train_end.isoformat()}，"
+                f"{resolved.meta.n_rows} 行）"
+            )
+        else:
+            model_notes.append(
+                f"复用模型版本 v_{resolved.train_end.isoformat()}（未到期）"
+            )
+    else:
+        active_trainer = (
+            trainer if trainer is not None else BaselineTrainer.load(model_dir)
+        )
     dataset = build_dataset(bars, factors)
     scoring = dataset.filter(pl.col(DATE_COL) == signal_day)
     if scoring.height == 0:
         raise DailyError(f"信号日 {signal_day} 没有因子数据")
-    active_trainer = trainer if trainer is not None else BaselineTrainer.load(model_dir)
     scores = _valid_scores(active_trainer.predict(scoring))
     if scores.height == 0:
         raise DailyError("模型打分在信号日全部为缺失，无法构建候选集")
@@ -549,7 +593,7 @@ def run_daily(
             "n_positions": float(len(current_volumes)),
         },
         turnover=float(result.turnover),
-        notes=notes,
+        notes=model_notes + notes,
     )
 
     if not dry_run:

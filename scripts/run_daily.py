@@ -29,7 +29,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from quant.automl.trainer import DEFAULT_MODEL_DIR  # noqa: E402
+from quant.automl.rolling import (  # noqa: E402
+    DEFAULT_REGISTRY_DIR,
+    DEFAULT_RETRAIN_EVERY_DAYS,
+    DEFAULT_TRAIN_WINDOW_DAYS as ROLLING_DEFAULT_TRAIN_WINDOW_DAYS,
+    RollingConfig,
+)
+from quant.automl.trainer import DEFAULT_MODEL_DIR, DEFAULT_TIME_LIMIT  # noqa: E402
 from quant.daily.pipeline import (  # noqa: E402
     DEFAULT_FACTOR_LIBRARY_DIR,
     DEFAULT_ORDERS_DIR,
@@ -93,6 +99,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="策略配置 JSON 路径；缺省全市场量化选股（现状）",
     )
     parser.add_argument("--dry-run", action="store_true", help="只计算并打印，不落盘")
+    parser.add_argument(
+        "--rolling",
+        action="store_true",
+        help="启用滚动重训（issue #34）：到期重训 / 复用注册表最近版本，忽略 --model-dir",
+    )
+    parser.add_argument(
+        "--registry-dir",
+        default=DEFAULT_REGISTRY_DIR,
+        help=f"滚动模型注册表目录，默认 {DEFAULT_REGISTRY_DIR}",
+    )
+    parser.add_argument(
+        "--retrain-every-days",
+        type=int,
+        default=DEFAULT_RETRAIN_EVERY_DAYS,
+        help=f"重训周期（开市日），默认 {DEFAULT_RETRAIN_EVERY_DAYS}",
+    )
+    parser.add_argument(
+        "--train-window-days",
+        type=int,
+        default=ROLLING_DEFAULT_TRAIN_WINDOW_DAYS,
+        help=f"重训训练窗口（开市日），默认 {ROLLING_DEFAULT_TRAIN_WINDOW_DAYS}",
+    )
+    parser.add_argument(
+        "--train-time-limit",
+        type=float,
+        default=DEFAULT_TIME_LIMIT,
+        help=f"重训单窗口训练时限（秒），默认 {DEFAULT_TIME_LIMIT:.0f}",
+    )
     return parser
 
 
@@ -172,6 +206,15 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     started = time.monotonic()
+    rolling_config = (
+        RollingConfig(
+            retrain_every_days=args.retrain_every_days,
+            train_window_days=args.train_window_days,
+            time_limit=args.train_time_limit,
+        )
+        if args.rolling
+        else None
+    )
     report = run_daily(
         Path(args.data_dir),
         Path(args.model_dir),
@@ -183,6 +226,8 @@ def main(argv: list[str] | None = None) -> int:
         reports_dir=DEFAULT_REPORTS_DIR,
         initial_cash=args.initial_cash,
         strategy_config=strategy_config,
+        rolling_config=rolling_config,
+        registry_dir=args.registry_dir,
         dry_run=args.dry_run,
     )
     _print_summary(report, time.monotonic() - started)
