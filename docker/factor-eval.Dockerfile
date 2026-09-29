@@ -7,6 +7,9 @@
 # 数据不打包进镜像，运行时只读挂载到 /data（见 docker/README.md）。
 FROM python:3.12-slim
 
+# pip 走清华镜像（构建期生效；运行时沙盒 --network none，不影响行为）
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
 RUN pip install --no-cache-dir \
     "polars==1.44.2" \
     "pyarrow==24.0.0" \
