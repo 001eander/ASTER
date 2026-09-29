@@ -256,6 +256,19 @@ def _write_library(root: Path, sources: dict[str, str]) -> Path:
     return root
 
 
+def _stub_corr(monkeypatch: pytest.MonkeyPatch, max_corr: float) -> None:
+    """把相关性查重阶段替换为可控的常数 ``max_corr``，专测折扣公式。"""
+    dummy = pl.DataFrame({"date": [dt.date(2024, 1, 1)], "value": [1.0]})
+    monkeypatch.setattr(
+        factor_module, "load_library_values", lambda *args, **kwargs: {"stub": dummy}
+    )
+    monkeypatch.setattr(
+        factor_module,
+        "max_library_corr",
+        lambda *args, **kwargs: CorrelationReport({"stub": max_corr}, max_corr),
+    )
+
+
 # ---------------------------------------------------------------------------
 # 管线各阶段
 # ---------------------------------------------------------------------------
@@ -405,6 +418,99 @@ class TestCorrelationGate:
         assert result.gate_passed is expected_gate
 
 
+class TestCollinearityDiscount:
+    """``score = quality × (1 − max_corr)``：折扣进数值与 notes，门控只是兜底。"""
+
+    def _evaluate_with_corr(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        max_corr: float,
+        *,
+        source: str = GOOD_FACTOR_SRC,
+    ) -> FactorEvaluation:
+        _stub_corr(monkeypatch, max_corr)
+        return evaluate_factor(
+            _write(tmp_path, source), _make_bars(), factor_library_dir=tmp_path
+        )
+
+    def test_score_discounted_by_max_corr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = self._evaluate_with_corr(tmp_path, monkeypatch, 0.4)
+
+        metrics = result.metrics
+        assert metrics["quality"] == metrics["rank_ic_mean"]
+        assert metrics["corr_discount"] == pytest.approx(0.6)
+        assert factor_module._score_payload(result)["score"] == pytest.approx(
+            metrics["rank_ic_mean"] * 0.6
+        )
+
+    def test_no_library_keeps_full_score(self, tmp_path: Path) -> None:
+        result = evaluate_factor(_write(tmp_path, GOOD_FACTOR_SRC), _make_bars())
+
+        metrics = result.metrics
+        assert metrics["max_corr"] is None
+        assert metrics["corr_discount"] == 1.0
+        assert factor_module._score_payload(result)["score"] == pytest.approx(
+            metrics["rank_ic_mean"]
+        )
+
+    def test_negative_quality_discounted_keeps_sign(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = self._evaluate_with_corr(
+            tmp_path, monkeypatch, 0.4, source=REVERSED_FACTOR_SRC
+        )
+
+        quality = result.metrics["rank_ic_mean"]
+        assert isinstance(quality, float) and quality < 0.0
+        score = factor_module._score_payload(result)["score"]
+        assert score < 0.0
+        assert score == pytest.approx(quality * 0.6)
+        assert abs(score) < abs(quality)
+
+    def test_redundant_factor_rejected_but_still_discounted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        over = MAX_CORR_REJECT + 0.2
+        result = self._evaluate_with_corr(tmp_path, monkeypatch, over)
+
+        # 折扣与门控并存：分数已按公式压低，门控再兜底拒绝。
+        assert result.metrics["rank_ic_mean"] >= RANK_IC_MIN
+        assert result.metrics["corr_discount"] == pytest.approx(1.0 - over)
+        assert result.gate_passed is False
+        score = factor_module._score_payload(result)["score"]
+        assert score == pytest.approx(result.metrics["rank_ic_mean"] * (1.0 - over))
+        assert 0.0 < score < result.metrics["rank_ic_mean"]
+
+    def test_max_corr_above_one_is_clamped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = self._evaluate_with_corr(tmp_path, monkeypatch, 1.4)
+
+        assert result.metrics["corr_discount"] == 0.0
+        assert factor_module._score_payload(result)["score"] == 0.0
+        assert result.gate_passed is False
+
+    def test_notes_explain_quality_and_discount(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = self._evaluate_with_corr(tmp_path, monkeypatch, 0.3)
+
+        notes = factor_module._score_payload(result)["notes"]
+        assert "quality=" in notes
+        assert "×(1-0.30)=" in notes
+        assert "score " in notes
+
+    def test_notes_mark_no_library_as_undiscounted(self, tmp_path: Path) -> None:
+        result = evaluate_factor(_write(tmp_path, GOOD_FACTOR_SRC), _make_bars())
+
+        notes = factor_module._score_payload(result)["notes"]
+        assert "quality=rank_ic" in notes
+        assert "未折扣" in notes
+
+
 class TestHardFailures:
     def test_lookahead_factor_flags_truncation(self, tmp_path: Path) -> None:
         data = _make_bars()
@@ -532,9 +638,15 @@ class TestCli:
             "mono",
             "turnover_mean",
             "max_corr",
+            "quality",
+            "corr_discount",
         }
         assert metrics["max_corr"] is None
+        assert metrics["corr_discount"] == 1.0
+        assert metrics["quality"] == pytest.approx(metrics["rank_ic_mean"])
+        assert payload["score"] == pytest.approx(metrics["rank_ic_mean"])
         assert "max_corr=n/a" in payload["notes"]
+        assert "未折扣" in payload["notes"]
         assert payload["details"]["truncation"]["ok"] is True
 
     def test_cli_reversed_factor_writes_negative_score(

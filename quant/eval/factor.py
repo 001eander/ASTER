@@ -21,14 +21,19 @@
 
 门控除 IC / ICIR / 分层单调性外，还含行为相关性：新因子与库内 pool 因子的
 ``max(|逐日截面相关均值|)`` 超过 :data:`MAX_CORR_REJECT` 时判冗余并拒绝
-（issue #26）。本阶段只拒绝与落盘指标，不折减 ``score``。
+（issue #26）。该阈值只是兜底，共线性对 ``score`` 的惩罚在指标阶段已按
+:func:`_corr_discount` 连续折减（issue #27）。
 
 奖励信号一致性
 --------------
-跑完评估的因子，``score = rank_ic_mean``，这是连续的质量信号，取值可负，门控只决定
-入库与否（``gate_passed``），不截断分数。Agent 因此能从分数梯度学习，不存在「分数高
-但被拒」的隐藏规则（AGENTS.md 量化纪律第 4 条）。硬失败（``stage != "done"``）不写
-``score.json``，由退出码表达。
+跑完评估的因子，``score = quality × (1 - max_corr)``：``quality`` 为折扣前的
+``rank_ic_mean``（连续质量信号，可负），``max_corr`` 为新因子与库内 pool 因子行为相关性
+的绝对值最大者（无库可查时为 None，折扣系数记 1.0）。共线性越强分数越低，高相关因子在
+分数排序上就已被压低；:data:`MAX_CORR_REJECT` 门控 (>0.7) 只是兜底拒绝，与折扣并存而非
+互斥的另一条分支。这样 Agent 能从分数梯度直接学到「高相关 = 低分」，不存在「分数高但
+被拒」的隐藏规则（AGENTS.md 量化纪律第 4 条）。``notes`` 把质量分与折扣拆开写，
+``details.metrics`` 同时落盘 ``quality`` 与 ``corr_discount``，便于核查。硬失败
+（``stage != "done"``）不写 ``score.json``，由退出码表达。
 
 性能预算
 --------
@@ -41,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import traceback
 from dataclasses import dataclass
@@ -129,8 +135,9 @@ class FactorEvaluation:
     :param error: 失败明细，成功为 None。
     :param gate_passed: 是否过 IC 门控；硬失败时为 False。
     :param metrics: 指标明细，键为 ``rank_ic_mean`` / ``rank_ic_std`` / ``icir`` /
-        ``ic_win_rate`` / ``n_days`` / ``mono`` / ``turnover_mean`` / ``max_corr``，
-        不可得为 None。
+        ``ic_win_rate`` / ``n_days`` / ``mono`` / ``turnover_mean`` / ``max_corr`` /
+        ``quality`` / ``corr_discount``，不可得为 None。``quality`` 为折扣前的
+        ``rank_ic_mean``，``corr_discount`` 为共线性折扣系数（无库可查时 1.0）。
     :param complexity: 复杂度度量明细，度量未执行时为 None。
     :param truncation: 截断重算明细，检测未执行时为 None。
     """
@@ -246,6 +253,32 @@ def _compute_metrics(
     }
 
 
+def _corr_magnitude(max_corr: float | None) -> float:
+    """把 ``max_corr`` 夹到 ``[0, 1]``；None / 非有限值按 0.0（不折扣）处理。"""
+    if not isinstance(max_corr, float) or not math.isfinite(max_corr):
+        return 0.0
+    return min(max(max_corr, 0.0), 1.0)
+
+
+def _corr_discount(max_corr: float | None) -> float:
+    """共线性折扣系数 ``1 - clamp(max_corr, 0, 1)``；无有效 ``max_corr`` 时为 1.0。"""
+    return 1.0 - _corr_magnitude(max_corr)
+
+
+def _discounted_score(metrics: Metrics) -> float:
+    """``score = quality × corr_discount``；无有效 IC 日或质量分不可得时记 0.0。"""
+    n_days = metrics.get("n_days")
+    if not isinstance(n_days, int) or n_days == 0:
+        return 0.0
+    quality = metrics.get("quality")
+    if not isinstance(quality, float):
+        return 0.0
+    discount = metrics.get("corr_discount")
+    if not isinstance(discount, float):
+        discount = 1.0
+    return quality * discount
+
+
 # ---------------------------------------------------------------------------
 # 评估管线
 # ---------------------------------------------------------------------------
@@ -268,8 +301,11 @@ def evaluate_factor(
 
     ``factor_library_dir`` 给出因子库目录时，指标阶段后计算新因子与库内 pool 因子的
     行为相关性，写入 ``metrics["max_corr"]``（``max(|逐日截面相关均值|)``），
-    ``max_corr > MAX_CORR_REJECT`` 判冗余并拒绝。目录下无 ``registry.json`` 或库为空时
-    跳过该阶段，``max_corr`` 为 None，行为与不传该参数一致。
+    ``max_corr > MAX_CORR_REJECT`` 判冗余并拒绝。同一 ``max_corr`` 以
+    ``1 - clamp(max_corr, 0, 1)`` 折减 ``score``：``score = quality × corr_discount``，
+    故被拒的因子分数也已被压低，门控只是兜底。目录下无 ``registry.json`` 或库为空时
+    跳过该阶段，``max_corr`` 为 None、``corr_discount`` 为 1.0，``score`` 等于
+    ``rank_ic_mean``，行为与不传该参数一致。
     """
     factor_path = Path(factor_path)
 
@@ -365,9 +401,12 @@ def evaluate_factor(
                 truncation=truncation_dict,
             )
     metrics["max_corr"] = max_corr
+    metrics["corr_discount"] = _corr_discount(max_corr)
 
-    # 8. 门控。行为相关性超过阈值即判冗余，与 IC 门控一并决定入库。
+    # 8. 门控。共线性折扣已写进 metrics（score = quality × corr_discount），门控只是
+    #    兜底拒绝：max_corr 超阈值即判冗余，与 IC 门控一并决定入库。
     rank_ic_mean = metrics["rank_ic_mean"]
+    metrics["quality"] = rank_ic_mean if isinstance(rank_ic_mean, float) else None
     icir = metrics["icir"]
     mono = metrics["mono"]
     redundant = isinstance(max_corr, float) and max_corr > MAX_CORR_REJECT
@@ -431,7 +470,7 @@ def _fmt(value: object, digits: int) -> str:
 
 
 def _notes(evaluation: FactorEvaluation) -> str:
-    """生成 ``score.json`` 的 ``notes`` 文本。"""
+    """生成 ``score.json`` 的 ``notes`` 文本，把质量分与共线性折扣拆开写。"""
     metrics = evaluation.metrics
     n_days = metrics.get("n_days")
     max_corr = _fmt(metrics.get("max_corr"), 2)
@@ -442,20 +481,35 @@ def _notes(evaluation: FactorEvaluation) -> str:
         f"icir={_fmt(metrics.get('icir'), 2)} "
         f"mono={_fmt(metrics.get('mono'), 2)} "
         f"max_corr={max_corr} "
-        f"n_days={n_days}"
+        f"n_days={n_days} "
+        f"{_discount_note(metrics)}"
     )
     return f"过门控：{body}" if evaluation.gate_passed else f"未过门控：{body}"
+
+
+def _discount_note(metrics: Metrics) -> str:
+    """把质量分与共线性折扣拆成可读片段，例如 ``quality=0.0260×(1-0.31)=score 0.0179``。
+
+    无 ``max_corr``（无库可查 / 未查重）时明示未折扣。
+    """
+    max_corr = metrics.get("max_corr")
+    if not isinstance(max_corr, float) or not math.isfinite(max_corr):
+        return "quality=rank_ic（无库可查，未折扣）"
+    magnitude = _corr_magnitude(max_corr)
+    return (
+        f"quality={_fmt(metrics.get('quality'), 4)}×(1-{magnitude:.2f})="
+        f"score {_discounted_score(metrics):.4f}"
+    )
 
 
 def _score_payload(evaluation: FactorEvaluation) -> dict[str, object]:
     """由评估结果构造 ``score.json`` 内容。
 
-    ``score = rank_ic_mean``（连续质量信号，可负）；n_days 为 0 时记 0.0。
+    ``score = quality × corr_discount``（连续质量信号，可负），两键随 ``details.metrics``
+    落盘；n_days 为 0 或质量分不可得时记 0.0。
     """
-    rank_ic_mean = evaluation.metrics.get("rank_ic_mean")
-    score = float(rank_ic_mean) if isinstance(rank_ic_mean, float) else 0.0
     return {
-        "score": score,
+        "score": _discounted_score(evaluation.metrics),
         "higher_is_better": True,
         "notes": _notes(evaluation),
         "details": {
