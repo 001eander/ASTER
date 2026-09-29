@@ -9,6 +9,7 @@ from datetime import date, timedelta
 import polars as pl
 import pytest
 
+from quant.backtest.account import Account
 from quant.backtest.broker import Broker, Order, RejectReason
 from quant.backtest.engine import BacktestEngine, BacktestResult
 from quant.backtest.fee import FeeModel
@@ -116,7 +117,7 @@ def mini_market() -> pl.DataFrame:
 
 
 def hold_first_day_signal(orders: dict[date, list[Order]]):
-    def signal(day: date, history: pl.DataFrame) -> list[Order]:
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
         return list(orders.get(day, []))
 
     return signal
@@ -221,7 +222,7 @@ def test_closed_days_are_skipped_and_orders_wait_for_next_open_day() -> None:
 def test_signal_history_never_exceeds_signal_day() -> None:
     seen: list[tuple[date, date | None, int]] = []
 
-    def signal(day: date, history: pl.DataFrame) -> list[Order]:
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
         assert (history["date"] > day).sum() == 0
         seen.append((day, history["date"].max(), history.height))
         return [Order(A, "buy", 100)] if day == DAYS_20[0] else []
@@ -248,7 +249,7 @@ def test_signal_receives_pre_start_history() -> None:
     bars = mini_market().filter(pl.col("date") <= days[3])
     heights: list[int] = []
 
-    def signal(day: date, history: pl.DataFrame) -> list[Order]:
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
         heights.append(history.height)
         return []
 
@@ -263,7 +264,7 @@ def test_signal_receives_pre_start_history() -> None:
 def test_signal_must_return_orders() -> None:
     days = DAYS_20[:3]
 
-    def signal(day: date, history: pl.DataFrame) -> list[Order]:
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
         return ["not an order"]  # type: ignore[list-item]
 
     with pytest.raises(TypeError, match="Order"):
@@ -287,7 +288,7 @@ def test_sell_generated_after_buy_fills_next_day() -> None:
     days = DAYS_20[:5]
     bars = build_bars([bar(day, A, 10.0) for day in days])
 
-    def signal(day: date, history: pl.DataFrame) -> list[Order]:
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
         if day == days[0]:
             return [Order(A, "buy", 300)]
         if day == days[1]:
@@ -317,6 +318,114 @@ def test_sell_generated_after_buy_fills_next_day() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 信号函数读取实时账户状态
+# ---------------------------------------------------------------------------
+
+#: 买入 1000 股 @10 元（含滑点与最低佣金）的现金支出，与下方用例的手算一致。
+BUY_1000_AT_10 = 1000 * 10.0 * 1.001 + 5.0
+
+
+def test_signal_reads_live_account_state_across_days() -> None:
+    """信号在 T 日收盘后读到的是 T 日成交与结算后的真实账户，且跨日随成交变化。"""
+    days = DAYS_20[:6]
+    bars = build_bars([bar(day, A, 10.0) for day in days])
+    seen: list[tuple[date, float, int]] = []
+    seen_account_ids: set[int] = set()
+
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
+        position = account.position(A)
+        volume = 0 if position is None else position.volume
+        seen.append((day, account.cash, volume))
+        seen_account_ids.add(id(account))
+        # 空仓且现金足够建仓时买满 1000 股，否则清掉全部持仓。
+        if position is None:
+            return [Order(A, "buy", 1000)] if account.cash >= BUY_1000_AT_10 else []
+        return [Order(A, "sell", position.volume)]
+
+    result = engine().run(
+        bars, calendar_of(days), no_actions(), signal, days[0], days[-1], 100_000.0
+    )
+
+    # 引擎每次传入同一个 Account 实例，不是每日新对象。
+    assert len(seen_account_ids) == 1
+    # 区间最后一个开市日不调用信号：共 5 次观测，账户状态与成交一一对应。
+    # 买入 1000 股花 10015；卖出 1000 股（10 × 0.999）净收 9990 − 5 − 4.995。
+    assert seen == [
+        (days[0], 100_000.0, 0),
+        (days[1], pytest.approx(89_985.0), 1000),
+        (days[2], pytest.approx(99_965.005), 0),
+        (days[3], pytest.approx(89_950.005), 1000),
+        (days[4], pytest.approx(99_930.01), 0),
+    ]
+    assert [(fill.date, fill.side, fill.volume) for fill in result.fills] == [
+        (days[1], "buy", 1000),
+        (days[2], "sell", 1000),
+        (days[3], "buy", 1000),
+        (days[4], "sell", 1000),
+        (days[5], "buy", 1000),  # 最后一日开盘成交 day4 收盘下的单
+    ]
+    assert result.rejects == []
+    # 闭仓期间的持仓权重能被信号读到，nav 也随成交变化。
+    assert result.nav["nav"][1] == pytest.approx(89_985.0 + 10_000.0)
+    assert result.nav["nav"][2] == pytest.approx(99_965.005)
+    assert result.final_nav == pytest.approx(89_915.01 + 10_000.0)
+
+
+def test_signal_gates_buys_on_account_cash_and_positions() -> None:
+    """信号按账户现金决定下不下单：买得起的才下单，其余日子记下跳过。"""
+    days = DAYS_20[:6]
+    bars = build_bars(
+        [row for day in days for row in (bar(day, A, 10.0), bar(day, B, 20.0))]
+    )
+    # 目标：A 1000 股、B 500 股；逐笔按剩余现金判断，买不起就不下单。
+    targets = ((A, 1000, 10.0), (B, 500, 20.0))
+    skipped: list[tuple[date, str]] = []
+    seen_cash: list[float] = []
+    seen_a_volume: list[int] = []
+
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
+        cash = account.cash
+        orders: list[Order] = []
+        for instrument, target_volume, price in targets:
+            position = account.position(instrument)
+            held = 0 if position is None else position.volume
+            missing = target_volume - held
+            if missing <= 0:
+                continue
+            need = missing * price * 1.001 + 5.0
+            if need > cash:
+                skipped.append((day, instrument))
+                continue
+            orders.append(Order(instrument, "buy", missing))
+            cash -= need
+        seen_cash.append(account.cash)
+        a_position = account.position(A)
+        seen_a_volume.append(0 if a_position is None else a_position.volume)
+        return orders
+
+    result = engine().run(
+        bars, calendar_of(days), no_actions(), signal, days[0], days[-1], 15_000.0
+    )
+
+    # 只有 A 建仓成功（10015 元）；B 需 10015 元，剩余 4985 元始终不够。
+    assert [(fill.date, fill.instrument, fill.side) for fill in result.fills] == [
+        (days[1], A, "buy")
+    ]
+    assert result.rejects == []  # 信号没下买不起的单，Broker 无单可拒
+    assert skipped == [(day, B) for day in days[:-1]]
+    assert seen_cash == [
+        pytest.approx(15_000.0),
+        pytest.approx(4_985.0),
+        pytest.approx(4_985.0),
+        pytest.approx(4_985.0),
+        pytest.approx(4_985.0),
+    ]
+    # 第二日起信号能看到 A 的 1000 股持仓。
+    assert seen_a_volume == [0, 1000, 1000, 1000, 1000]
+    assert result.final_nav == pytest.approx(4_985.0 + 10_000.0)
+
+
+# ---------------------------------------------------------------------------
 # 停牌：按最近可得价估值，nav 不断档
 # ---------------------------------------------------------------------------
 
@@ -326,7 +435,7 @@ def test_suspension_valued_at_last_price() -> None:
     quoted = {days[0]: 10.0, days[1]: 11.0, days[2]: 12.0, days[5]: 15.0}
     bars = build_bars([bar(day, A, price) for day, price in quoted.items()])
 
-    def signal(day: date, history: pl.DataFrame) -> list[Order]:
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
         if day == days[0]:
             return [Order(A, "buy", 300)]
         if day == days[2]:
@@ -374,7 +483,7 @@ def dividend_market(ex_date: date, close_on_ex: float) -> pl.DataFrame:
 
 
 def buy_first_day_signal(first_day: date, volume: int = 1000):
-    def signal(day: date, history: pl.DataFrame) -> list[Order]:
+    def signal(day: date, history: pl.DataFrame, account: Account) -> list[Order]:
         return [Order(A, "buy", volume)] if day == first_day else []
 
     return signal
@@ -475,7 +584,7 @@ def test_corporate_action_ignored_for_unheld_instrument() -> None:
         bars,
         calendar_of(days),
         build_actions([(days[2], B, 0.5, 1.0)]),
-        lambda day, history: [],
+        lambda day, history, account: [],
         days[0],
         days[-1],
         100_000.0,
@@ -530,7 +639,7 @@ def test_run_rejects_bars_without_required_columns() -> None:
             pl.DataFrame({"date": [DAY0], "instrument": [A]}, schema={"date": pl.Date, "instrument": pl.String}),
             calendar_of([DAY0]),
             no_actions(),
-            lambda day, history: [],
+            lambda day, history, account: [],
             DAY0,
             DAY0,
             100_000.0,
@@ -542,7 +651,7 @@ def test_empty_range_yields_empty_nav() -> None:
         mini_market(),
         calendar_of(DAYS_20),
         no_actions(),
-        lambda day, history: [],
+        lambda day, history, account: [],
         DAY0 - timedelta(days=10),
         DAY0 - timedelta(days=5),
         50_000.0,
@@ -562,7 +671,7 @@ def test_negative_initial_cash_rejected() -> None:
             mini_market(),
             calendar_of(DAYS_20),
             no_actions(),
-            lambda day, history: [],
+            lambda day, history, account: [],
             DAYS_20[0],
             DAYS_20[-1],
             -1.0,

@@ -9,8 +9,8 @@
    交易日收盘时的 ``signal_fn`` 给出。
 3. **日终公司行为**：除权日 = ``d``，调 :func:`quant.backtest.corporate.apply_corporate_actions`。
 4. **日终估值**：按当日收盘价记 ``nav``；停牌（当日无行情）持仓沿用最近可得价。
-5. **收盘决策**：``signal_fn(d, history)`` 生成次日订单，``history`` 只含 ``date <= d``
-   的行。
+5. **收盘决策**：``signal_fn(d, history, account)`` 生成次日订单，``history`` 只含
+   ``date <= d`` 的行，``account`` 为当次回测的实时账户。
 
 无前视的结构性保证
 ------------------
@@ -67,8 +67,13 @@ EMPTY_BARS: pl.DataFrame = pl.DataFrame(
     }
 )
 
-#: 信号函数：给定 T 日与 ``date <= T`` 的历史行情，返回 T+1 开盘的订单。
-SignalFn = Callable[[date, pl.DataFrame], list[Order]]
+#: 信号函数：给定 T 日、``date <= T`` 的历史行情与实时账户，返回 T+1 开盘的订单。
+#:
+#: 第三个参数是引擎内部同一个 :class:`~quant.backtest.account.Account` 实例，反映 T 日
+#: 收盘后（当日成交与结算完成）的现金与持仓，可用于组合优化等依赖 ``w_prev`` 的决策。
+#: 信号函数只应读取账户状态；下单交由 :class:`~quant.backtest.broker.Broker` 在 T+1
+#: 开盘撮合，直接改动账户会破坏会计恒等式与净值口径。
+SignalFn = Callable[[date, pl.DataFrame, Account], list[Order]]
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +169,10 @@ class BacktestEngine:
 
         ``bars`` 为 DAILY_BARS 全历史（可含 ``start`` 之前的行，作为因子回溯窗口），
         ``calendar`` 为 TRADE_CALENDAR，``actions`` 为 CORPORATE_ACTIONS。
-        ``signal_fn(T, history)`` 在 T 日收盘后调用，返回 T+1 开盘的订单；区间最后一个
-        开市日不再调用（生成的订单没有可执行的下一日）。
+        ``signal_fn(T, history, account)`` 在 T 日收盘后调用，返回 T+1 开盘的订单；区间
+        最后一个开市日不再调用（生成的订单没有可执行的下一日）。``account`` 是引擎内部
+        同一个 :class:`~quant.backtest.account.Account`，调用时已反映 T 日收盘后的真实
+        状态（成交与结算均已完成），信号函数只读不写。
         """
         _check_columns(bars, BAR_COLUMNS, "行情表")
         if initial_cash < 0.0:
@@ -243,6 +250,7 @@ class BacktestEngine:
                     signal_fn,
                     day,
                     _history(ordered, bar_dates, history_end, day),
+                    account,
                 )
 
         return BacktestResult(
@@ -298,9 +306,11 @@ def _record(
         )
 
 
-def _signal_orders(signal_fn: SignalFn, day: date, history: pl.DataFrame) -> list[Order]:
+def _signal_orders(
+    signal_fn: SignalFn, day: date, history: pl.DataFrame, account: Account
+) -> list[Order]:
     """调用 ``signal_fn`` 并校验返回类型。"""
-    orders = list(signal_fn(day, history))
+    orders = list(signal_fn(day, history, account))
     for order in orders:
         if not isinstance(order, Order):
             raise TypeError(
