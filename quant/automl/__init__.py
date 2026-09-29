@@ -18,8 +18,16 @@ from quant.automl.dataset import (
     build_dataset,
     missing_rate,
 )
+from quant.automl.recipes import (
+    DEFAULT_RECIPE,
+    RECIPES,
+    Recipe,
+    get_recipe,
+    recipe_kwargs,
+)
 from quant.automl.trainer import (
     DEFAULT_EVAL_METRIC,
+    DEFAULT_HYPERPARAMETERS,
     DEFAULT_MODEL_DIR,
     DEFAULT_PRESETS,
     DEFAULT_TIME_LIMIT,
@@ -31,16 +39,22 @@ from quant.automl.trainer import (
 __all__ = [
     "DATE_COL",
     "DEFAULT_EVAL_METRIC",
+    "DEFAULT_HYPERPARAMETERS",
     "DEFAULT_MODEL_DIR",
     "DEFAULT_PRESETS",
+    "DEFAULT_RECIPE",
     "DEFAULT_TIME_LIMIT",
     "DELAY_COL",
     "INSTRUMENT_COL",
     "LABEL_COL",
+    "RECIPES",
     "BaselineTrainer",
     "FactorCompute",
+    "Recipe",
     "build_dataset",
+    "get_recipe",
     "gpu_available",
     "missing_rate",
+    "recipe_kwargs",
     "resolve_num_gpus",
 ]

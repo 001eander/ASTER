@@ -109,6 +109,8 @@ class TrainConfig:
     max_rows: int
     #: 训练所用的股票池（命名池名或自定义池路径）；``None`` 表示全市场。
     universe: str | None = None
+    #: 命名训练配方（issue #35）；``None`` 表示未使用配方。
+    recipe: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -122,6 +124,7 @@ class TrainConfig:
             "horizon": self.horizon,
             "max_rows": self.max_rows,
             "universe": self.universe,
+            "recipe": self.recipe,
         }
 
     @classmethod
@@ -138,6 +141,7 @@ class TrainConfig:
             horizon=int(data.get("horizon", DEFAULT_HORIZON)),
             max_rows=int(data.get("max_rows", 0)),
             universe=None if universe is None else str(universe),
+            recipe=None if data.get("recipe") is None else str(data["recipe"]),
         )
 
 
@@ -277,6 +281,7 @@ def train_baseline(
     trainer: BaselineTrainer | None = None,
     config_path: str | Path | None = None,
     universe: str | None = None,
+    recipe: str | None = None,
 ) -> TrainReport:
     """跑完整训练链路并落盘模型与配置，返回 :class:`TrainReport`。
 
@@ -325,6 +330,7 @@ def train_baseline(
             time_limit=time_limit,
             path=model_dir,
             use_gpu=use_gpu,
+            recipe=recipe,
         )
     active.train(dataset)
     active.save()
@@ -341,11 +347,12 @@ def train_baseline(
             end=end.isoformat() if end is not None else None,
             n_rows=summary.kept_rows,
             feature_columns=list(summary.feature_columns),
-            presets=presets,
+            presets=active.presets,
             time_limit=float(time_limit),
             horizon=horizon,
             max_rows=max_rows,
             universe=universe,
+            recipe=recipe,
         ),
     )
 
@@ -445,6 +452,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--presets", default=DEFAULT_PRESETS, help=f"AutoGluon 预设，默认 {DEFAULT_PRESETS}"
     )
     parser.add_argument(
+        "--recipe",
+        default=None,
+        help="命名训练配方（memory_safe/full/bagged/hpo）；给出后覆盖 --presets",
+    )
+    parser.add_argument(
         "--time-limit",
         type=float,
         default=DEFAULT_TIME_LIMIT,
@@ -541,6 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         use_gpu=args.use_gpu,
         config_path=args.train_config,
         universe=args.universe,
+        recipe=args.recipe,
     )
     _print_summary(report)
     return 0
