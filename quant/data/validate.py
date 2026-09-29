@@ -83,8 +83,13 @@ ADJ_TOLERANCE: float = 0.001
 MIN_EXPECTED_DAYS_NO_DATA: int = 5
 #: 最近窗口模式下向前多读的天数，用于给 shift(1) 与缺口检查留前文。
 LOOKBACK_PAD_DAYS: int = 400
-#: 新股上市后无涨跌幅限制的宽限自然日数（按板块）。
-NEW_LISTING_GRACE_DAYS: dict[str, int] = {"main": 0, "cyb": 14, "kcb": 14, "bj": 14}
+#: 新股上市后无涨跌幅限制的宽限自然日数（按板块）。全面注册制后各板块新股
+#: 上市初期均无涨跌幅限制（前 5 个交易日），统一宽限 14 个自然日。
+NEW_LISTING_GRACE_DAYS: dict[str, int] = {"main": 14, "cyb": 14, "kcb": 14, "bj": 14}
+#: 无涨跌幅限制日的行为阈值：全市场最大带宽是北交所 30%，|后复权收益| 超过
+#: 此值加裕量在任何涨跌幅制度下都不可能发生（退市整理首日 / 复牌首日 / 新股
+#: 窗口外的特殊安排），豁免 limit_move 的 error 并降级为 warning 供人工抽查。
+UNRESTRICTED_BAND: float = 0.35
 #: 汇总消息里最多列出的样例条数。
 MAX_EXAMPLES: int = 3
 
@@ -487,7 +492,7 @@ def _check_limit_move(
         return
 
     frame = win.select("instrument", "date", "close", "adjfactor", "limit_up",
-                       "limit_down", "_prev_close", "_prev_adj")
+                       "limit_down", "_prev_close", "_prev_adj", "_ord", "_prev_ord")
     if instruments.height:
         frame = frame.join(
             instruments.select(
@@ -564,9 +569,31 @@ def _check_limit_move(
         )
         .filter(~in_grace)
     )
-    violations = checked.filter(
+    exceeded = checked.filter(
         pl.col("_adj_ret").abs() - pl.col("_ratio") > LIMIT_TOLERANCE
     )
+    # 无涨跌幅限制日豁免（issue #59 用 CSMAR 交易所执行数据全量核对：这些日子
+    # 按交易所口径均不违规）：
+    # 1) 相邻行情间隔超过 GAP_OPEN_DAYS 个开市日后的首个交易日——长期停牌复牌
+    #    或退市整理期首日，无涨跌幅限制（同批票同时会出现在 date_gap 里，不另报）。
+    # 2) |后复权收益| 超过 UNRESTRICTED_BAND——超过北交所 30% 这一全市场最大带宽，
+    #    任何涨跌幅制度下都不可能，必为无限制日（gap 较小的退市整理首日走这条），
+    #    降级为 warning 供人工抽查。
+    resumed = (pl.col("_ord") - pl.col("_prev_ord") - 1 > GAP_OPEN_DAYS).fill_null(False)
+    unrestricted = exceeded.filter(resumed | (pl.col("_adj_ret").abs() > UNRESTRICTED_BAND))
+    violations = exceeded.filter(
+        ~resumed & (pl.col("_adj_ret").abs() <= UNRESTRICTED_BAND)
+    )
+    if unrestricted.height:
+        _add(
+            issues,
+            "warning",
+            "unrestricted_move",
+            f"{unrestricted.height} 行后复权涨跌幅越过自研带宽但属于无涨跌幅限制日"
+            f"（复牌 / 退市整理首日或 |收益| > {UNRESTRICTED_BAND:.0%}）："
+            f"{_examples(unrestricted)}",
+            unrestricted.height,
+        )
     if violations.height:
         worst = violations.with_columns(
             (pl.col("_adj_ret") - pl.col("_ratio")).alias("_excess")
