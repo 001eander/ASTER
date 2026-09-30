@@ -49,6 +49,50 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 `{"op": "seed", "parents": [], "run_id": null, "generation": 0}`，自动挖掘产出的
 因子填写父因子 id、产出 run 与代数。
 
+## 因子入库（内循环产物）
+
+入库是**人工确认**的半自动流程：内循环把方案停在 `runs/<ts>/eb/solutions/<id>/solution/`
+（`best/` 为当前最优），由人执行一条命令把过门控因子登记进库里，确认摘要无误后提交
+`factor_library/`。不做自动入库，避免无人复核的因子进入建模数据集。
+
+先取该因子的 `score.json`：沙盒会写在 `/work/score.json`，若没留存，用同一数据复算一遍，
+口径与沙盒一致（`--factor-library-dir` 指向当前库，`max_corr` 才与评分时相同）：
+
+```bash
+uv run python -m quant.eval.factor runs/<ts>/best/factor.py \
+  --factor-library-dir factor_library --out runs/<ts>/best/score.json
+```
+
+再执行入库：
+
+```bash
+uv run python scripts/promote_factor.py \
+  --factor runs/<ts>/best/factor.py \
+  --score runs/<ts>/best/score.json \
+  --factor-id vol_ratio_5_20_neg \
+  --hypothesis "5/20 日均量比取负，缩量做多" \
+  --signal-source volume --time-scale short --mechanism volume_ratio \
+  --op mutation --parent vol_ratio_5_20 \
+  --run-id 20260930T101500 --generation 2
+```
+
+入库规则与退出码（代码在 `quant/factor_lib/promote.py`）：
+
+- `score.json` 的 `details.gate_passed` 不为 `true` 直接拒绝。门控即评分口径，奖励信号
+  一致性是红线。
+- `factor_id` 不与 registry 现有条目重复，目标 `factor_library/<factor_id>.py` 不存在。
+- `metrics` 从 `details.metrics` 回填：`rank_ic_mean` → `rank_ic`，另取 `icir` 与
+  `max_corr`（无库可查时为 `null`）。`lineage` 记 `--op` / `--parent`（可重复）/
+  `--run-id` / `--generation`，`status` 固定为 `pool`。
+- `direction` 三键为必填非空字符串，取值沿用上面的 best-effort 约定；schema 只约束
+  非空，不枚举具体词。
+- 源码先复制、registry 后原子写回；写回失败会回滚刚复制的源码。命令只打印摘要，
+  不碰 git。
+- 退出码：0 成功，1 未过门控，2 与既有库冲突，3 输入文件或参数非法，4 registry
+  缺失或非法。
+
+测试见 `tests/test_factor_promote.py`。
+
 ## 定期整库
 
 注册表只增不减，同一信号的换皮变体会稀释建模数据集。整库把「池内留谁」写成可复算的
@@ -102,4 +146,5 @@ uv run python scripts/prune_factor_library.py --start 2023-01-01 --end 2024-12-3
 | `vol_ratio_5_20_neg` | 量能 | 5/20 日均量比取负，缩量做多（M2 内循环冒烟首个入库因子） | 5 / 20 | volume |
 
 评估脚本见 `scripts/eval_baseline_factors.py`，测试见 `tests/test_baseline_factors.py`；
-注册表与整库规则测试见 `tests/test_factor_lib.py` / `tests/test_factor_lib_prune.py`。
+注册表与整库规则测试见 `tests/test_factor_lib.py` / `tests/test_factor_lib_prune.py`；
+入库流程测试见 `tests/test_factor_promote.py`。
