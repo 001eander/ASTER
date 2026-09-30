@@ -248,7 +248,8 @@ class E2EConfig:
     universe: str | None = None
     #: 策略枚举：``stock_selection`` / ``index_enhanced``（issue #71）。
     strategy: str = DEFAULT_STRATEGY
-    #: 指增调仓频率：``D`` / ``W`` / ``M``（仅 ``index_enhanced`` 生效）。
+    #: 调仓频率：``D`` / ``W`` / ``M``；``stock_selection`` 与 ``index_enhanced`` 均生效，
+    #: 非调仓日信号函数直接保持持仓（与 ``run_daily`` 生产路径同一口径）。
     rebalance_freq: str = DEFAULT_REBALANCE_FREQ
     #: 策略配置 JSON 路径；给了就用它的 ``optimize`` 等参数，并要求与上面各项一致。
     strategy_config_path: Path | None = None
@@ -310,6 +311,7 @@ class SignalStats:
     calls: int = 0
     optimize_calls: int = 0
     empty_score_days: int = 0
+    non_rebalance_days: int = 0
     relaxed_attempts: int = 0
     relaxed_success: int = 0
     hold_fallback: int = 0
@@ -529,15 +531,23 @@ def make_signal_fn(
     top_k: int,
     lookback_days: int,
     stats: SignalStats,
+    calendar: pl.DataFrame,
+    rebalance_freq: str,
 ) -> SignalFn:
     """构造引擎所需的 ``signal_fn(T, history, account) -> list[Order]``。
 
     ``history`` 由引擎保证只含 ``date <= T`` 的行；本实现改用预构造的面板并显式按
     ``date <= T`` 切片，口径与 ``history`` 等价（见模块 docstring 的无前视说明）。
+    调仓频率由 ``rebalance_freq`` 控制：非调仓日直接保持持仓（引擎按市值自然漂移），
+    与 ``run_daily`` 生产路径的调仓日门控同一口径（``quant.daily.pipeline``）。
     """
+    open_days = calendar.filter(pl.col("is_open"))[DATE_COL].to_list()
 
     def signal(day: date, _history: pl.DataFrame, account: Any) -> list[Order]:
         stats.calls += 1
+        if not is_rebalance_day(open_days, day, rebalance_freq):
+            stats.non_rebalance_days += 1
+            return []
         score_frame = score_by_day.get(day)
         if score_frame is None or score_frame.height == 0:
             stats.empty_score_days += 1
@@ -1055,6 +1065,8 @@ def run_e2e(
             top_k=config.top_k,
             lookback_days=config.lookback_days,
             stats=stats,
+            calendar=calendar,
+            rebalance_freq=strategy_config.rebalance_freq,
         )
 
     result = BacktestEngine(Broker(FeeModel())).run(

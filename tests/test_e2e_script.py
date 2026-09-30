@@ -522,6 +522,30 @@ def test_run_e2e_empty_scores_produces_no_orders(tmp_path: Path) -> None:
     assert "没有成交" in result.states_path.read_text(encoding="utf-8")
 
 
+def test_run_e2e_stock_selection_weekly_rebalance(tmp_path: Path) -> None:
+    """stock_selection 路径下调仓频率门控：非调仓日不优化不成交（issue #113）。"""
+    config, days, trainer = _build_e2e_fixture(tmp_path, scores=None)
+    config = replace(config, rebalance_freq="W")
+    optimizer = PortfolioOptimizer(lam=1.0, kappa=0.002, w_max=0.5, max_turnover=0.30)
+
+    result = e2e.run_e2e(config, trainer=trainer, optimizer=optimizer)
+
+    open_days = [d for d in days if config.start <= d <= config.end]
+    rebalance_days = [
+        d for d in open_days if e2e.is_rebalance_day(open_days, d, "W")
+    ]
+    assert len(rebalance_days) > 1, "夹具窗口应跨多个 ISO 周"
+    # 引擎在最后一个交易日之后无法撮合，末日可能不触发信号，计数允许 ±1。
+    assert abs(result.stats.non_rebalance_days - (len(open_days) - len(rebalance_days))) <= 1
+    fill_days = {fill.date for fill in result.result.fills}
+    # 成交发生在调仓日的次日（T 日信号，T+1 撮合），故成交日也属于调仓日次日集合。
+    assert len(result.result.fills) > 0
+    assert result.stats.non_rebalance_days > 0
+    for day in fill_days:
+        previous_open = max(d for d in open_days if d < day)
+        assert previous_open in set(rebalance_days)
+
+
 def test_run_e2e_infeasible_falls_back_to_hold(tmp_path: Path) -> None:
     config, _days, trainer = _build_e2e_fixture(tmp_path, scores=None)
     optimizer = _InfeasibleOptimizer()
