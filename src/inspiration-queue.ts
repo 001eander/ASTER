@@ -146,7 +146,7 @@ export class InspirationQueue {
     for (const item of orphans) await this.persist(item, "waiting");
   }
 
-  private async reload(knownIds: string[]): Promise<void> {
+  private async reload(committedIds: string[]): Promise<void> {
     const dir = path.join(this.runDir, "queue");
     let names: string[] = [];
     try {
@@ -160,6 +160,7 @@ export class InspirationQueue {
       rows.push(JSON.parse(await readFile(path.join(dir, name), "utf8")) as QueueRow);
     }
     rows.sort((a, b) => inspirationSeq(a.id) - inspirationSeq(b.id));
+    const committed = new Set(committedIds);
     for (const row of rows) {
       const item: Inspiration = {
         id: row.id,
@@ -167,12 +168,17 @@ export class InspirationQueue {
         context: row.context,
         ebGeneration: row.ebGeneration,
       };
+      // 跑过的方向仍算「用过」，seen 全量收，避免重复提交。
       this.seen.add(normalizeDirection(row.direction));
+      // 已进经验库的 held 是跑完后的残留，不代表在飞任务，不能占并发配额；
+      // 未完成的 held（崩溃孤儿）由 requeueOrphans 交回 waiting，配额照旧。
+      if (row.state === "held" && committed.has(row.id)) continue;
       this.bumpGroup(directionGroup(row.direction), 1);
       if (row.state === "held") this.held.set(item.id, item);
       else this.waiting.push(item);
     }
-    this.nextId = Math.max(0, ...[...rows.map((row) => row.id), ...knownIds].map(inspirationSeq)) + 1;
+    this.nextId =
+      Math.max(0, ...[...rows.map((row) => row.id), ...committedIds].map(inspirationSeq)) + 1;
   }
 
   private bumpGroup(group: string, delta: number): void {
