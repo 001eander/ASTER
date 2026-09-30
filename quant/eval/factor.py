@@ -26,14 +26,16 @@
 
 奖励信号一致性
 --------------
-跑完评估的因子，``score = quality × (1 - max_corr)``：``quality`` 为折扣前的
+跑完评估的因子，``score = quality × corr_discount``，其中
+``corr_discount = max(0, 1 - max_corr / MAX_CORR_REJECT)``：``quality`` 为折扣前的
 ``rank_ic_mean``（连续质量信号，可负），``max_corr`` 为新因子与库内 pool 因子行为相关性
-的绝对值最大者（无库可查时为 None，折扣系数记 1.0）。共线性越强分数越低，高相关因子在
-分数排序上就已被压低；:data:`MAX_CORR_REJECT` 门控 (>0.7) 只是兜底拒绝，与折扣并存而非
-互斥的另一条分支。这样 Agent 能从分数梯度直接学到「高相关 = 低分」，不存在「分数高但
-被拒」的隐藏规则（AGENTS.md 量化纪律第 4 条）。``notes`` 把质量分与折扣拆开写，
-``details.metrics`` 同时落盘 ``quality`` 与 ``corr_discount``，便于核查。硬失败
-（``stage != "done"``）不写 ``score.json``，由退出码表达。
+的绝对值最大者（无库可查时为 None，折扣系数记 1.0）。折扣按门控阈值归一，``max_corr``
+逼近 :data:`MAX_CORR_REJECT` 时折扣趋零，同一 IC 下低相关因子拿到更高分——挖掘目标是
+「IC 高且与库内低相关」，单看 IC 不再够。:data:`MAX_CORR_REJECT` 门控 (>0.7) 只是兜底
+拒绝，与折扣并存而非互斥的另一条分支。这样 Agent 能从分数梯度直接学到「高相关 = 低分」，
+不存在「分数高但被拒」的隐藏规则（AGENTS.md 量化纪律第 4 条）。``notes`` 把质量分与折扣
+拆开写，``details.metrics`` 同时落盘 ``quality`` / ``corr_discount`` / ``corr_ok`` /
+``corr_threshold``，便于核查。硬失败（``stage != "done"``）不写 ``score.json``，由退出码表达。
 
 性能预算
 --------
@@ -137,8 +139,10 @@ class FactorEvaluation:
     :param gate_passed: 是否过 IC 门控；硬失败时为 False。
     :param metrics: 指标明细，键为 ``rank_ic_mean`` / ``rank_ic_std`` / ``icir`` /
         ``ic_win_rate`` / ``n_days`` / ``mono`` / ``turnover_mean`` / ``max_corr`` /
-        ``quality`` / ``corr_discount``，不可得为 None。``quality`` 为折扣前的
-        ``rank_ic_mean``，``corr_discount`` 为共线性折扣系数（无库可查时 1.0）。
+        ``corr_threshold`` / ``corr_ok`` / ``quality`` / ``corr_discount``，不可得为
+        None。``quality`` 为折扣前的 ``rank_ic_mean``，``corr_discount`` 为按
+        :data:`MAX_CORR_REJECT` 归一化的共线性折扣（无库可查时 1.0），``corr_ok`` 为
+        ``max_corr <= MAX_CORR_REJECT``（无库可查时 None）。
     :param complexity: 复杂度度量明细，度量未执行时为 None。
     :param truncation: 截断重算明细，检测未执行时为 None。
     """
@@ -262,8 +266,14 @@ def _corr_magnitude(max_corr: float | None) -> float:
 
 
 def _corr_discount(max_corr: float | None) -> float:
-    """共线性折扣系数 ``1 - clamp(max_corr, 0, 1)``；无有效 ``max_corr`` 时为 1.0。"""
-    return 1.0 - _corr_magnitude(max_corr)
+    """按门控阈值归一化的共线性折扣：``max(0, 1 - |max_corr| / MAX_CORR_REJECT)``。
+
+    无有效 ``max_corr``（无库可查 / 未查重）时为 1.0。``|max_corr|`` 触及
+    :data:`MAX_CORR_REJECT` 即折扣到 0，与门控阈值同源：低相关因子保住完整质量分，
+    高相关因子在同一 IC 下被压到更低，相关性成为与 IC 并重的一等目标。
+    """
+    magnitude = _corr_magnitude(max_corr)
+    return max(0.0, 1.0 - magnitude / MAX_CORR_REJECT)
 
 
 def _discounted_score(metrics: Metrics) -> float:
@@ -304,10 +314,10 @@ def evaluate_factor(
     ``factor_library_dir`` 给出因子库目录时，指标阶段后计算新因子与库内 pool 因子的
     行为相关性，写入 ``metrics["max_corr"]``（``max(|逐日截面相关均值|)``），
     ``max_corr > MAX_CORR_REJECT`` 判冗余并拒绝。同一 ``max_corr`` 以
-    ``1 - clamp(max_corr, 0, 1)`` 折减 ``score``：``score = quality × corr_discount``，
-    故被拒的因子分数也已被压低，门控只是兜底。目录下无 ``registry.json`` 或库为空时
-    跳过该阶段，``max_corr`` 为 None、``corr_discount`` 为 1.0，``score`` 等于
-    ``rank_ic_mean``，行为与不传该参数一致。
+    ``max(0, 1 - clamp(max_corr, 0, 1) / MAX_CORR_REJECT)`` 折减 ``score``：
+    ``score = quality × corr_discount``，故相关性越强分数越低，门控只是兜底。目录下无
+    ``registry.json`` 或库为空时跳过该阶段，``max_corr`` 为 None、``corr_discount`` 为
+    1.0，``score`` 等于 ``rank_ic_mean``，行为与不传该参数一致。
 
     批量回填等场景可先经 :func:`quant.factor_lib.correlation.load_library_values`
     取一次库因子取值，再对每个被评因子传入 ``library_values``（排除自身后）复用，
@@ -414,6 +424,8 @@ def evaluate_factor(
         )
     metrics["max_corr"] = max_corr
     metrics["corr_discount"] = _corr_discount(max_corr)
+    metrics["corr_threshold"] = MAX_CORR_REJECT
+    metrics["corr_ok"] = None if max_corr is None else max_corr <= MAX_CORR_REJECT
 
     # 8. 门控。共线性折扣已写进 metrics（score = quality × corr_discount），门控只是
     #    兜底拒绝：max_corr 超阈值即判冗余，与 IC 门控一并决定入库。
@@ -500,7 +512,7 @@ def _notes(evaluation: FactorEvaluation) -> str:
 
 
 def _discount_note(metrics: Metrics) -> str:
-    """把质量分与共线性折扣拆成可读片段，例如 ``quality=0.0260×(1-0.31)=score 0.0179``。
+    """把质量分与共线性折扣拆成可读片段，例如 ``quality=0.0260×(1-0.31/0.70)=score 0.0145``。
 
     无 ``max_corr``（无库可查 / 未查重）时明示未折扣。
     """
@@ -509,7 +521,8 @@ def _discount_note(metrics: Metrics) -> str:
         return "quality=rank_ic（无库可查，未折扣）"
     magnitude = _corr_magnitude(max_corr)
     return (
-        f"quality={_fmt(metrics.get('quality'), 4)}×(1-{magnitude:.2f})="
+        f"quality={_fmt(metrics.get('quality'), 4)}×"
+        f"(1-{magnitude:.2f}/{MAX_CORR_REJECT:.2f})="
         f"score {_discounted_score(metrics):.4f}"
     )
 

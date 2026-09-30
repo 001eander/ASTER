@@ -65,7 +65,7 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 5. **截断重算**：抽样检测日，把数据截断到该日重算，与全量结果对比。检出前视即硬失败。
 6. **指标与行为查重**：RankIC 均值、ICIR、分层单调性、换手，以及与库内已入库因子（`status == "pool"`）的逐日截面相关均值 `max_corr`。
 
-跑完全流程则写出 `/work/score.json`：`score = quality × (1 - max_corr)`（可负，越高越好）。`quality` 为折扣前的 `rank_ic_mean`，`max_corr` 取绝对值最大者（库内无因子可查时为 None，折扣记 1.0），共线性越强分数越低；`higher_is_better` 为 true，`notes` 与 `details.metrics` 把 `quality` 与 `corr_discount` 拆开写。硬失败（崩溃、schema 不合规、前视、复杂度超标）由退出码非 0 表达，不写 `score.json`。
+跑完全流程则写出 `/work/score.json`：`score = quality × max(0, 1 - max_corr/0.7)`（可负，越高越好）。`quality` 为折扣前的 `rank_ic_mean`，`max_corr` 取绝对值最大者（库内无因子可查时为 None，折扣记 1.0）。折扣按门控阈值归一，`max_corr` 逼近 0.7 时分数趋零：挖掘目标是「IC 高且与库内低相关」，单看 IC 不够。`higher_is_better` 为 true，`notes` 与 `details.metrics` 把 `quality` / `corr_discount` / `corr_ok` / `corr_threshold` 拆开写。硬失败（崩溃、schema 不合规、前视、复杂度超标）由退出码非 0 表达，不写 `score.json`。
 
 ## 过关线
 

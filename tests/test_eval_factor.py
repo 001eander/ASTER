@@ -419,7 +419,7 @@ class TestCorrelationGate:
 
 
 class TestCollinearityDiscount:
-    """``score = quality × (1 − max_corr)``：折扣进数值与 notes，门控只是兜底。"""
+    """``score = quality × max(0, 1 − max_corr/MAX_CORR_REJECT)``：折扣进数值与 notes，门控只是兜底。"""
 
     def _evaluate_with_corr(
         self,
@@ -441,9 +441,9 @@ class TestCollinearityDiscount:
 
         metrics = result.metrics
         assert metrics["quality"] == metrics["rank_ic_mean"]
-        assert metrics["corr_discount"] == pytest.approx(0.6)
+        assert metrics["corr_discount"] == pytest.approx(1.0 - 0.4 / MAX_CORR_REJECT)
         assert factor_module._score_payload(result)["score"] == pytest.approx(
-            metrics["rank_ic_mean"] * 0.6
+            metrics["rank_ic_mean"] * (1.0 - 0.4 / MAX_CORR_REJECT)
         )
 
     def test_no_library_keeps_full_score(self, tmp_path: Path) -> None:
@@ -467,7 +467,7 @@ class TestCollinearityDiscount:
         assert isinstance(quality, float) and quality < 0.0
         score = factor_module._score_payload(result)["score"]
         assert score < 0.0
-        assert score == pytest.approx(quality * 0.6)
+        assert score == pytest.approx(quality * (1.0 - 0.4 / MAX_CORR_REJECT))
         assert abs(score) < abs(quality)
 
     def test_redundant_factor_rejected_but_still_discounted(
@@ -476,13 +476,13 @@ class TestCollinearityDiscount:
         over = MAX_CORR_REJECT + 0.2
         result = self._evaluate_with_corr(tmp_path, monkeypatch, over)
 
-        # 折扣与门控并存：分数已按公式压低，门控再兜底拒绝。
+        # 折扣与门控并存：相关超过阈值即把折扣压到 0，门控再兜底拒绝。
         assert result.metrics["rank_ic_mean"] >= RANK_IC_MIN
-        assert result.metrics["corr_discount"] == pytest.approx(1.0 - over)
+        assert result.metrics["corr_ok"] is False
+        assert result.metrics["corr_discount"] == 0.0
         assert result.gate_passed is False
         score = factor_module._score_payload(result)["score"]
-        assert score == pytest.approx(result.metrics["rank_ic_mean"] * (1.0 - over))
-        assert 0.0 < score < result.metrics["rank_ic_mean"]
+        assert score == 0.0
 
     def test_max_corr_above_one_is_clamped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -500,7 +500,7 @@ class TestCollinearityDiscount:
 
         notes = factor_module._score_payload(result)["notes"]
         assert "quality=" in notes
-        assert "×(1-0.30)=" in notes
+        assert "×(1-0.30/0.70)=" in notes
         assert "score " in notes
 
     def test_notes_mark_no_library_as_undiscounted(self, tmp_path: Path) -> None:
@@ -638,6 +638,8 @@ class TestCli:
             "mono",
             "turnover_mean",
             "max_corr",
+            "corr_threshold",
+            "corr_ok",
             "quality",
             "corr_discount",
         }
