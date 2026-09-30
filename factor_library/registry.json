@@ -6,9 +6,9 @@
       "hypothesis": "过去 5 日复权收盘涨幅短期延续",
       "code_path": "factor_library/mom_5.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.026973979957857153,
+        "icir": -0.17488024759762327,
+        "max_corr": 0.9264832912788324
       },
       "direction": {
         "signal_source": "price",
@@ -28,9 +28,9 @@
       "hypothesis": "过去 20 日复权收盘涨幅中期延续",
       "code_path": "factor_library/mom_20.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.03498431735697994,
+        "icir": -0.2158270358101414,
+        "max_corr": 0.8308032875627548
       },
       "direction": {
         "signal_source": "price",
@@ -50,9 +50,9 @@
       "hypothesis": "5 日开盘涨幅过度反应后回落（开盘口径，区别于 mom）",
       "code_path": "factor_library/reversal_5.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": 0.02065373605010004,
+        "icir": 0.13665234803817788,
+        "max_corr": 0.789294655618472
       },
       "direction": {
         "signal_source": "price",
@@ -72,9 +72,9 @@
       "hypothesis": "短期均量 / 长期均量放大代表关注度抬升",
       "code_path": "factor_library/vol_ratio_5.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.035691925047124755,
+        "icir": -0.3158310141857539,
+        "max_corr": 0.7913468049520732
       },
       "direction": {
         "signal_source": "price_volume",
@@ -94,9 +94,9 @@
       "hypothesis": "成交额相对自身近期均值放大代表换手活跃度上升",
       "code_path": "factor_library/turnover_proxy.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.028403186203670456,
+        "icir": -0.27510161613399636,
+        "max_corr": 0.6729333410333859
       },
       "direction": {
         "signal_source": "price_volume",
@@ -116,9 +116,9 @@
       "hypothesis": "复权收盘与成交量的 10 日时序相关，度量量价配合",
       "code_path": "factor_library/price_volume_corr_10.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.03816452470885256,
+        "icir": -0.41841288219451395,
+        "max_corr": 0.2601907028092164
       },
       "direction": {
         "signal_source": "price_volume",
@@ -138,9 +138,9 @@
       "hypothesis": "20 日日收益标准差，高波动对应低风险调整收益",
       "code_path": "factor_library/volatility_20.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.048917142993805604,
+        "icir": -0.25043156438550823,
+        "max_corr": 0.8464054242442424
       },
       "direction": {
         "signal_source": "price",
@@ -160,9 +160,9 @@
       "hypothesis": "相对 20 日高点的回撤，越深越看空",
       "code_path": "factor_library/max_drawdown_20.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.00823856660512712,
+        "icir": -0.050350193607071624,
+        "max_corr": 0.6419743204008301
       },
       "direction": {
         "signal_source": "price",
@@ -182,9 +182,9 @@
       "hypothesis": "收盘对 10 日均线偏离，过大则回归",
       "code_path": "factor_library/ma_bias_10.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.028370287491527486,
+        "icir": -0.18303743263446934,
+        "max_corr": 0.9264832912788324
       },
       "direction": {
         "signal_source": "price",
@@ -204,9 +204,9 @@
       "hypothesis": "收盘对 20 日均线偏离，过大则回归",
       "code_path": "factor_library/ma_bias_20.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.03504169703492338,
+        "icir": -0.22016633576758832,
+        "max_corr": 0.873911308691314
       },
       "direction": {
         "signal_source": "price",
@@ -226,9 +226,9 @@
       "hypothesis": "日内相对振幅的 10 日均值，度量震荡强度",
       "code_path": "factor_library/range_pct.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.05382763871387819,
+        "icir": -0.27093199585398703,
+        "max_corr": 0.8464054242442424
       },
       "direction": {
         "signal_source": "price",
@@ -248,9 +248,9 @@
       "hypothesis": "收盘对当日 VWAP 的偏离，度量日内资金强弱",
       "code_path": "factor_library/vwap_bias.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": -0.021757064982087345,
+        "icir": -0.16274147441119885,
+        "max_corr": 0.32122155044728323
       },
       "direction": {
         "signal_source": "price",
@@ -270,9 +270,9 @@
       "hypothesis": "5/20 日均量比取负，缩量做多（M2 内循环冒烟首个入库因子）",
       "code_path": "factor_library/vol_ratio_5_20_neg.py",
       "metrics": {
-        "rank_ic": null,
-        "icir": null,
-        "max_corr": null
+        "rank_ic": 0.025993877443192436,
+        "icir": 0.2695764406976935,
+        "max_corr": 0.7913468049520732
       },
       "direction": {
         "signal_source": "volume",
