@@ -127,6 +127,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_TIME_LIMIT,
         help=f"重训单窗口训练时限（秒），默认 {DEFAULT_TIME_LIMIT:.0f}",
     )
+    parser.add_argument(
+        "--recipe",
+        default=None,
+        help="滚动重训的命名训练配方（memory_safe/full/bagged/hpo）",
+    )
     return parser
 
 
@@ -211,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
             retrain_every_days=args.retrain_every_days,
             train_window_days=args.train_window_days,
             time_limit=args.train_time_limit,
+            recipe=args.recipe,
         )
         if args.rolling
         else None

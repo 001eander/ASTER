@@ -111,6 +111,8 @@ class RollingConfig:
     time_limit: float = DEFAULT_TIME_LIMIT
     use_gpu: bool | None = None
     max_rows: int = DEFAULT_MAX_ROWS
+    #: 命名训练配方（issue #35）；非空时覆盖 presets 等训练旋钮。
+    recipe: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("retrain_every_days", "train_window_days", "horizon"):
@@ -164,6 +166,7 @@ def default_trainer_factory(
             time_limit=config.time_limit,
             path=path,
             use_gpu=config.use_gpu,
+            recipe=config.recipe,
         )
 
     return factory

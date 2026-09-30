@@ -173,6 +173,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expanding", action="store_true", help="扩张窗口（默认滚动）")
     parser.add_argument("--presets", default=DEFAULT_PRESETS, help="AutoGluon 预设")
     parser.add_argument(
+        "--recipe",
+        default=None,
+        help="命名训练配方（memory_safe/full/bagged/hpo）；给出后覆盖 --presets",
+    )
+    parser.add_argument(
         "--time-limit",
         type=float,
         default=DEFAULT_TIME_LIMIT,
@@ -234,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
             time_limit=args.time_limit,
             path=models_dir / f"window_{index:02d}",
             use_gpu=args.use_gpu,
+            recipe=args.recipe,
         )
 
     config = WalkForwardConfig(

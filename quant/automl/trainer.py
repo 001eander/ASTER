@@ -50,6 +50,20 @@ PROBLEM_TYPE: str = "regression"
 #: 默认预设（起步档，后续 issue #35 调优）。
 DEFAULT_PRESETS: str = "medium_quality"
 
+#: 默认模型集（issue #63）：精简到 GBM / XGB / CAT / NN_TORCH 四个族。
+#:
+#: issue #16 实跑暴露 16GB 内存瓶颈：RandomForest / ExtraTrees 估算需求
+#: ~20GB 被 AutoGluon 直接跳过，NeuralNetFastAI 因内存余量不足被跳过，
+#: LightGBMXT 吃掉 71% 预算且验证分更差。精简模型集让预算集中到有效模型上，
+#: WeightedEnsemble 不再因 OOM 跳过而缺失模型族。传 ``hyperparameters=None``
+#: 可回到 AutoGluon 全集（见 :class:`BaselineTrainer`）。
+DEFAULT_HYPERPARAMETERS: dict[str, Any] = {
+    "GBM": {},
+    "XGB": {},
+    "CAT": {},
+    "NN_TORCH": {},
+}
+
 #: 默认训练时限（秒）。
 DEFAULT_TIME_LIMIT: float = 600.0
 
@@ -134,6 +148,11 @@ class BaselineTrainer:
         path: str | Path = DEFAULT_MODEL_DIR,
         use_gpu: bool | None = None,
         verbosity: int = DEFAULT_VERBOSITY,
+        hyperparameters: dict[str, Any] | str | None = DEFAULT_HYPERPARAMETERS,
+        num_bag_folds: int | None = None,
+        num_stack_levels: int | None = None,
+        hyperparameter_tune_kwargs: dict[str, Any] | None = None,
+        recipe: str | None = None,
     ) -> None:
         self.label = label
         self.feature_columns = (
@@ -146,6 +165,12 @@ class BaselineTrainer:
         self.use_gpu = gpu_available() if use_gpu is None else use_gpu
         self.num_gpus = resolve_num_gpus(self.use_gpu)
         self.verbosity = verbosity
+        self.hyperparameters = hyperparameters
+        self.num_bag_folds = num_bag_folds
+        self.num_stack_levels = num_stack_levels
+        self.hyperparameter_tune_kwargs = hyperparameter_tune_kwargs
+        if recipe is not None:
+            self._apply_recipe(recipe)
 
         self.predictor: TabularPredictor | None = None
         #: 训练/加载后解析出的特征列。
@@ -154,6 +179,17 @@ class BaselineTrainer:
         )
         #: 训练集各特征缺测率报告（``train`` 后可用）。
         self.feature_missing_rate_: pl.DataFrame | None = None
+
+    def _apply_recipe(self, name: str) -> None:
+        """按命名配方覆盖训练旋钮（recipe 的字段优先于构造参数）。"""
+        from quant.automl.recipes import get_recipe
+
+        found = get_recipe(name)
+        self.presets = found.presets
+        self.hyperparameters = found.hyperparameters
+        self.num_bag_folds = found.num_bag_folds
+        self.num_stack_levels = found.num_stack_levels
+        self.hyperparameter_tune_kwargs = found.hyperparameter_tune_kwargs
 
     # -- 状态 ---------------------------------------------------------------
 
@@ -230,13 +266,22 @@ class BaselineTrainer:
             path=self.path,
             verbosity=self.verbosity,
         )
-        predictor.fit(
-            train_data=train_pandas,
-            tuning_data=valid_pandas,
-            time_limit=limit,
-            presets=self.presets,
-            num_gpus=self.num_gpus,
-        )
+        fit_kwargs: dict[str, Any] = {
+            "train_data": train_pandas,
+            "tuning_data": valid_pandas,
+            "time_limit": limit,
+            "presets": self.presets,
+            "num_gpus": self.num_gpus,
+        }
+        if self.hyperparameters is not None:
+            fit_kwargs["hyperparameters"] = self.hyperparameters
+        if self.num_bag_folds is not None:
+            fit_kwargs["num_bag_folds"] = self.num_bag_folds
+        if self.num_stack_levels is not None:
+            fit_kwargs["num_stack_levels"] = self.num_stack_levels
+        if self.hyperparameter_tune_kwargs is not None:
+            fit_kwargs["hyperparameter_tune_kwargs"] = self.hyperparameter_tune_kwargs
+        predictor.fit(**fit_kwargs)
         self.predictor = predictor
         return self
 
@@ -301,6 +346,7 @@ def _feature_names_from(predictor: TabularPredictor) -> list[str] | None:
 
 __all__ = [
     "DEFAULT_EVAL_METRIC",
+    "DEFAULT_HYPERPARAMETERS",
     "DEFAULT_MODEL_DIR",
     "DEFAULT_PRESETS",
     "DEFAULT_TIME_LIMIT",
