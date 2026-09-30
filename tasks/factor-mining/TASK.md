@@ -69,7 +69,9 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 
 ## 过关线
 
-Context 判断 `stop` 的依据是 `score.json` 里 `details.gate_passed == true`。这等价于同时满足：
+### 单因子过关线
+
+`score.json` 的 `details.gate_passed == true` 表示单个因子过线，等价于同时满足：
 
 - `rank_ic_mean ≥ 0.02`
 - `icir ≥ 0.3`
@@ -77,7 +79,15 @@ Context 判断 `stop` 的依据是 `score.json` 里 `details.gate_passed == true
 - 与库内 pool 因子的行为相关性 `max_corr ≤ 0.7`（`|max_corr| > 0.7` 即判冗余拒绝；库内无因子可查时该项跳过）
 - 截断重算与复杂度全部通过
 
-五项缺一不可。注意共线性折扣已先行压低 `score`，`max_corr > 0.7` 的拒绝只是兜底，不存在「分数高却被拒」的隐藏规则。
+五项缺一不可。共线性折扣已先行压低 `score`，`max_corr > 0.7` 的拒绝只是兜底，不存在「分数高却被拒」的隐藏规则。
+
+### 任务过关线（Context 判 `stop` 的依据）
+
+本任务要的不是「单个最好因子过线」，而是为因子库凑出足够的低相关因子：
+
+- 因子库 `factor_library/registry.json` 中，由本内循环产出（`lineage.generation ≥ 1` 且 `status == pool`）、且指标满足单因子过关线（`metrics.rank_ic ≥ 0.02`、`metrics.icir ≥ 0.3`、`metrics.max_corr ≤ 0.7`）的因子，累计达到 **10 个**。
+- 只有这个累计数达标才写 `stop: true`；单个因子过线不等于任务完成。
+- 与已入库因子 `max_corr > 0.7` 的同质候选拿不到 `gate_passed`，必须换机制，而不是换窗口或符号。
 
 ## 数据
 

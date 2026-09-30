@@ -6,7 +6,7 @@
 
 ## 1. 读现场
 
-打开最近记录的 `logPath`、当前最好方案的 `solutionDir`（也可看 `best/`），以及 `queue/` 里还在等或已被领取的灵感。读 score.json 里的指标明细和 eval 日志，只看总分不够。
+打开最近记录的 `logPath`、当前最好方案的 `solutionDir`（也可看 `best/`），以及 `queue/` 里还在等或已被领取的灵感。读 score.json 里的指标明细和 eval 日志，只看总分不够。同时读 `factor_library/registry.json`，数一下其中 `lineage.generation ≥ 1`、`status == "pool"` 且指标过单因子过关线的因子有几个，判断离任务过关线还差几个。
 
 完成：你能用一句话说明每条近期记录是崩溃、schema 不合规、检出前视、复杂度超标，还是跑完但指标没过线；并能列出队列里已有的方向。没有记录时，直接从题目出发。
 
@@ -57,6 +57,8 @@ user prompt 里会附一张「方向分布地图」，两节：
 
 ## 4. 停
 
-仅当当前最好已经达到题目正文的过关线时，写 `"stop": true`。题目没写过关线，就不要停。
+先读 `factor_library/registry.json`，数出其中 `lineage.generation ≥ 1`、`status == "pool"` 且指标满足单因子过关线（`rank_ic ≥ 0.02`、`icir ≥ 0.3`、`max_corr ≤ 0.7`）的因子个数。
 
-否则 `"stop": false`，且 `inspirations` 不能空。循环的预算由 harness 截止。
+仅当这个累计数达到题目正文写的任务过关线（入库因子数量目标）时，写 `"stop": true`。题目没写数量目标，就不要停；单个最好因子过线不算任务完成。
+
+否则 `"stop": false`，且 `inspirations` 不能空：还要继续挖与库内低相关的新方向，直到累计入库数达标。循环的预算由 harness 截止。
