@@ -25,7 +25,10 @@ fi
 
 data_dir="${FACTOR_DATA_DIR:-/data}"
 score_out="${SCORE_OUT:-/work/score.json}"
+# 镜像内只读的因子库（含 registry.json），相关性查重据此判定冗余。
+factor_library_dir="${FACTOR_LIBRARY_DIR:-/app/factor_library}"
 
 python -m quant.eval.factor "${solution_dir}/factor.py" \
   --data-dir "${data_dir}" \
+  --factor-library-dir "${factor_library_dir}" \
   --out "${score_out}"

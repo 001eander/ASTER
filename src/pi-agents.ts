@@ -13,6 +13,13 @@ import { CONTEXT7_TOOLS, context7PiRoot } from "./context7-pi.js";
 import { finishProposalWrite } from "./proposal-result.js";
 import { withTimeout } from "./timeout.js";
 import { parseLooseJson } from "./loose-json.js";
+import {
+  buildDirectionMap,
+  formatDirectionMap,
+  loadFactorRegistry,
+  readQueueDirections,
+} from "./direction-map.js";
+import { buildPeerDigest, formatPeerDigest } from "./factor-digest.js";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const PROPOSAL_REVIEW_MIN_MS = 60_000;
@@ -29,9 +36,13 @@ export async function createPiContext(opts: {
   runDir: string;
   task: string;
   model?: string;
+  // 因子库根目录，默认仓库根；单测可注入临时目录。
+  rootDir?: string;
 }): Promise<ContextPort> {
   const sdk = await loadSdk();
   const system = await readFile(path.join(rootDir, "prompts", "context.md"), "utf8");
+  const registryRoot = opts.rootDir ?? rootDir;
+  const queueDir = path.join(opts.runDir, "queue");
   const session = await openSession(sdk, {
     cwd: opts.runDir,
     system,
@@ -47,19 +58,35 @@ export async function createPiContext(opts: {
         new ActivitySink({ runDir: opts.runDir, actor: "context", id: "context" }),
       );
       try {
-        await session.prompt(
-          [
-            `题目：\n${opts.task}`,
-            `经验库代数：${input.generation}`,
-            `当前最好：${JSON.stringify(input.best ?? null)}`,
-            `全部记录：${JSON.stringify(input.records)}`,
-            `队列需要补货：${input.needsMore}。队列已满：${input.mustStopProducing}。`,
-            `已经用过的方向（不要再交）：${JSON.stringify(input.takenDirections)}`,
-            "先读各条记录的 logPath、最好方案的 solutionDir（或 best/）和 queue/，再按系统提示做诊断、出实验。",
-            `把结果写到 ${outFile}，JSON：{"inspirations":[{"direction":"...","context":"..."}],"stop":false}。只有当前最好已经达到题目过关线才把 stop 设为 true；否则 stop 必须是 false，且 inspirations 不能空。`,
-            "写完本轮即停。",
-          ].join("\n\n"),
+        const directionMap = formatDirectionMap(
+          buildDirectionMap(
+            await loadFactorRegistry(registryRoot),
+            input.records,
+            await readQueueDirections(queueDir),
+          ),
         );
+        const parts = [
+          `题目：\n${opts.task}`,
+          `经验库代数：${input.generation}`,
+          `当前最好：${JSON.stringify(input.best ?? null)}`,
+          `全部记录：${JSON.stringify(input.records)}`,
+          `队列需要补货：${input.needsMore}。队列已满：${input.mustStopProducing}。`,
+          `已经用过的方向（不要再交）：${JSON.stringify(input.takenDirections)}`,
+        ];
+        if (input.deferredDirections.length > 0) {
+          parts.push(
+            `因同一信号源并发额度已满而暂缓的方向（不算用过，名额空出后再交）：${JSON.stringify(
+              input.deferredDirections,
+            )}`,
+          );
+        }
+        if (directionMap) parts.push(directionMap);
+        parts.push(
+          "先读各条记录的 logPath、最好方案的 solutionDir（或 best/）和 queue/，再按系统提示做诊断、出实验。",
+          `把结果写到 ${outFile}，JSON：{"inspirations":[{"direction":"...","context":"..."}],"stop":false}。只有当前最好已经达到题目过关线才把 stop 设为 true；否则 stop 必须是 false，且 inspirations 不能空。`,
+          "写完本轮即停。",
+        );
+        await session.prompt(parts.join("\n\n"));
         const text = await readFile(outFile, "utf8");
         let raw: { inspirations?: Array<{ direction: string; context: string }>; stop?: boolean };
         try {
@@ -83,9 +110,12 @@ export async function createPiProposal(opts: {
   model?: string;
   timeoutMs?: number;
   runDir: string;
+  // 因子库根目录，默认仓库根；单测可注入临时目录。
+  rootDir?: string;
 }): Promise<ProposalPort> {
   const sdk = await loadSdk();
   const system = await readFile(path.join(rootDir, "prompts", "proposal.md"), "utf8");
+  const registryRoot = opts.rootDir ?? rootDir;
   const roleModel = parseRoleModel(opts.model ?? DEFAULT_PROPOSAL_MODEL);
   const timeoutMs = opts.timeoutMs;
   return {
@@ -107,6 +137,10 @@ export async function createPiProposal(opts: {
           `灵感 ${inspiration.id}（经验库 v${inspiration.ebGeneration}）：${inspiration.direction}`,
           inspiration.context,
         ];
+        const digest = formatPeerDigest(
+          buildPeerDigest(await loadFactorRegistry(registryRoot), inspiration.direction),
+        );
+        if (digest) parts.push(digest);
         if (lastError) {
           parts.push(
             `上一轮崩溃了。先读 ${workDir} 里已有文件，只修这个错误，不要推倒重来。`,

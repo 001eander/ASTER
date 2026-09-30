@@ -4,6 +4,8 @@
 # 只装评估链依赖（polars / pyarrow / numpy / radon），版本与仓库 uv.lock 对齐；
 # 不含 akshare / autogluon / torch（沙盒禁网，且因子评估用不到），镜像保持小、启动快。
 # quant/ 包打入 /app 并设 PYTHONPATH，eval.sh 以 `python -m quant.eval.factor` 调用。
+# factor_library/ 打入 /app/factor_library（只读），供相关性查重加载库内 pool 因子；
+# registry 的 code_path 相对仓库根解析，容器内父目录即 /app。
 # 数据不打包进镜像，运行时只读挂载到 /data（见 docker/README.md）。
 FROM python:3.12-slim
 
@@ -18,6 +20,7 @@ RUN pip install --no-cache-dir \
 
 WORKDIR /app
 COPY quant/ /app/quant/
+COPY factor_library/ /app/factor_library/
 
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \

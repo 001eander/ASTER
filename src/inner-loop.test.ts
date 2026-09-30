@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ExperienceBank } from "./experience-bank.js";
 import { runInnerLoop, type ContextPort, type ProposalPort, type SandboxPort } from "./inner-loop.js";
+import { InspirationQueue } from "./inspiration-queue.js";
 
 async function runDir(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "hyra-pi-loop-"));
@@ -293,6 +294,58 @@ describe("inner loop", () => {
     expect(evaluated).toEqual(["insp-009"]);
     expect(result.records).toHaveLength(9);
     expect(result.stopReason).toBe("context-stop");
+  });
+
+  it("hands inspirations rejected by the direction quota back to Context", async () => {
+    const root = await runDir();
+    const deferredSeen: string[][] = [];
+    const turns: Array<{ directions: string[]; stop?: boolean }> = [
+      { directions: ["量：放量反弹", "量：缩量反转", "量：价量背离"] },
+      { directions: ["价：跨期基差"], stop: true },
+    ];
+    let turn = 0;
+    const context: ContextPort = {
+      async produce(input) {
+        deferredSeen.push(input.deferredDirections);
+        const script = turns[Math.min(turn, turns.length - 1)]!;
+        turn += 1;
+        return {
+          stop: script.stop,
+          inspirations: script.directions.map((direction) => ({
+            direction,
+            context: `try ${direction}`,
+          })),
+        };
+      },
+    };
+
+    const result = await runInnerLoop({
+      runDir: root,
+      maxProposals: 1,
+      maxSandboxes: 1,
+      lowWater: 2,
+      highWater: 6,
+      directionQuota: 2,
+      budget: { maxSolutions: 5 },
+      context,
+      proposal: writingProposal(),
+      sandbox: scriptedSandbox([{ ok: true, score: 5, log: "score 5" }]),
+    });
+
+    // 第一条把「量」这一组占满，第三条被配额挡下；下一轮交回 Context 让它等名额。
+    expect(deferredSeen[0]).toEqual([]);
+    expect(deferredSeen[1]).toEqual(["量：价量背离"]);
+    expect(result.stopReason).toBe("context-stop");
+    expect(result.records).toHaveLength(1);
+
+    // quota 只是暂时饱和：被挡下的方向没进 seen，名额空出后还能再交。
+    const queue = await InspirationQueue.open(root, {
+      lowWater: 2,
+      highWater: 6,
+      directionQuota: 2,
+    });
+    expect(queue.takenDirections()).toContain("量：放量反弹");
+    expect(queue.takenDirections()).not.toContain("量：价量背离");
   });
 });
 

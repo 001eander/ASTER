@@ -16,15 +16,24 @@
    自检，防止缓存 schema 漂移；因子输出过 ``validate_output`` 失败同样归此类。
 4. ``compute``：因子 ``compute`` 抛异常，``error`` 取 traceback 末行。
 5. ``truncation``：``check_truncation`` 检出前视，或数据太短不可检（#18）。
-6. ``metrics``：IC / 分层 / 换手等指标计算失败。
+6. ``metrics``：IC / 分层 / 换手等指标计算失败，或行为相关性查重失败（registry 非法）。
 7. ``done``：全流程跑完，``gate_passed`` 表示是否过门控。
+
+门控除 IC / ICIR / 分层单调性外，还含行为相关性：新因子与库内 pool 因子的
+``max(|逐日截面相关均值|)`` 超过 :data:`MAX_CORR_REJECT` 时判冗余并拒绝
+（issue #26）。该阈值只是兜底，共线性对 ``score`` 的惩罚在指标阶段已按
+:func:`_corr_discount` 连续折减（issue #27）。
 
 奖励信号一致性
 --------------
-跑完评估的因子，``score = rank_ic_mean``，这是连续的质量信号，取值可负，门控只决定
-入库与否（``gate_passed``），不截断分数。Agent 因此能从分数梯度学习，不存在「分数高
-但被拒」的隐藏规则（AGENTS.md 量化纪律第 4 条）。硬失败（``stage != "done"``）不写
-``score.json``，由退出码表达。
+跑完评估的因子，``score = quality × (1 - max_corr)``：``quality`` 为折扣前的
+``rank_ic_mean``（连续质量信号，可负），``max_corr`` 为新因子与库内 pool 因子行为相关性
+的绝对值最大者（无库可查时为 None，折扣系数记 1.0）。共线性越强分数越低，高相关因子在
+分数排序上就已被压低；:data:`MAX_CORR_REJECT` 门控 (>0.7) 只是兜底拒绝，与折扣并存而非
+互斥的另一条分支。这样 Agent 能从分数梯度直接学到「高相关 = 低分」，不存在「分数高但
+被拒」的隐藏规则（AGENTS.md 量化纪律第 4 条）。``notes`` 把质量分与折扣拆开写，
+``details.metrics`` 同时落盘 ``quality`` 与 ``corr_discount``，便于核查。硬失败
+（``stage != "done"``）不写 ``score.json``，由退出码表达。
 
 性能预算
 --------
@@ -37,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import traceback
 from dataclasses import dataclass
@@ -69,6 +79,7 @@ from quant.factor_api.truncation import (
     TruncationResult,
     check_truncation,
 )
+from quant.factor_lib.correlation import load_library_values, max_library_corr
 from quant.labels import attach_label
 
 # ---------------------------------------------------------------------------
@@ -84,6 +95,9 @@ ICIR_MIN: float = 0.2
 #: 分层单调性下限（Spearman），严格要求大于此值。
 MONO_MIN: float = 0.0
 
+#: 与库内因子行为相关性的拒绝阈值：``|max_corr| > 此值`` 即判冗余，不过门控。
+MAX_CORR_REJECT: float = 0.7
+
 #: 换手率口径：Top-50 组合。
 TURNOVER_TOP_N: int = 50
 
@@ -95,6 +109,9 @@ DEFAULT_DATA_DIR: str = "data"
 
 #: CLI 默认 score.json 输出路径。
 DEFAULT_OUT: str = "score.json"
+
+#: CLI 默认因子库目录（含 registry.json）。
+DEFAULT_FACTOR_LIBRARY_DIR: str = "factor_library"
 
 #: 默认标签 horizon，与 ``quant.labels`` 一致。
 DEFAULT_HORIZON: int = 1
@@ -118,7 +135,9 @@ class FactorEvaluation:
     :param error: 失败明细，成功为 None。
     :param gate_passed: 是否过 IC 门控；硬失败时为 False。
     :param metrics: 指标明细，键为 ``rank_ic_mean`` / ``rank_ic_std`` / ``icir`` /
-        ``ic_win_rate`` / ``n_days`` / ``mono`` / ``turnover_mean``，不可得为 None。
+        ``ic_win_rate`` / ``n_days`` / ``mono`` / ``turnover_mean`` / ``max_corr`` /
+        ``quality`` / ``corr_discount``，不可得为 None。``quality`` 为折扣前的
+        ``rank_ic_mean``，``corr_discount`` 为共线性折扣系数（无库可查时 1.0）。
     :param complexity: 复杂度度量明细，度量未执行时为 None。
     :param truncation: 截断重算明细，检测未执行时为 None。
     """
@@ -234,6 +253,32 @@ def _compute_metrics(
     }
 
 
+def _corr_magnitude(max_corr: float | None) -> float:
+    """把 ``max_corr`` 夹到 ``[0, 1]``；None / 非有限值按 0.0（不折扣）处理。"""
+    if not isinstance(max_corr, float) or not math.isfinite(max_corr):
+        return 0.0
+    return min(max(max_corr, 0.0), 1.0)
+
+
+def _corr_discount(max_corr: float | None) -> float:
+    """共线性折扣系数 ``1 - clamp(max_corr, 0, 1)``；无有效 ``max_corr`` 时为 1.0。"""
+    return 1.0 - _corr_magnitude(max_corr)
+
+
+def _discounted_score(metrics: Metrics) -> float:
+    """``score = quality × corr_discount``；无有效 IC 日或质量分不可得时记 0.0。"""
+    n_days = metrics.get("n_days")
+    if not isinstance(n_days, int) or n_days == 0:
+        return 0.0
+    quality = metrics.get("quality")
+    if not isinstance(quality, float):
+        return 0.0
+    discount = metrics.get("corr_discount")
+    if not isinstance(discount, float):
+        discount = 1.0
+    return quality * discount
+
+
 # ---------------------------------------------------------------------------
 # 评估管线
 # ---------------------------------------------------------------------------
@@ -244,13 +289,23 @@ def evaluate_factor(
     data: pl.DataFrame,
     *,
     horizon: int = DEFAULT_HORIZON,
+    factor_library_dir: str | Path | None = None,
 ) -> FactorEvaluation:
     """对单个因子跑完整评估管线。
 
     ``data`` 为已加载的全样本行情（12 列 ``DAILY_BARS`` 或前 10 列均可，函数内
     自行 ``select``）。任一步失败即短路返回，``ok=False``，``stage`` / ``error``
     指明失败处。全流程跑完返回 ``ok=True``、``stage="done"``，``gate_passed``
-    由 :data:`RANK_IC_MIN` / :data:`ICIR_MIN` / :data:`MONO_MIN` 决定。
+    由 :data:`RANK_IC_MIN` / :data:`ICIR_MIN` / :data:`MONO_MIN` 与行为相关性
+    阈值 :data:`MAX_CORR_REJECT` 共同决定。
+
+    ``factor_library_dir`` 给出因子库目录时，指标阶段后计算新因子与库内 pool 因子的
+    行为相关性，写入 ``metrics["max_corr"]``（``max(|逐日截面相关均值|)``），
+    ``max_corr > MAX_CORR_REJECT`` 判冗余并拒绝。同一 ``max_corr`` 以
+    ``1 - clamp(max_corr, 0, 1)`` 折减 ``score``：``score = quality × corr_discount``，
+    故被拒的因子分数也已被压低，门控只是兜底。目录下无 ``registry.json`` 或库为空时
+    跳过该阶段，``max_corr`` 为 None、``corr_discount`` 为 1.0，``score`` 等于
+    ``rank_ic_mean``，行为与不传该参数一致。
     """
     factor_path = Path(factor_path)
 
@@ -329,10 +384,32 @@ def evaluate_factor(
             truncation=truncation_dict,
         )
 
-    # 7. 门控。
+    # 7. 行为相关性查重：与库内 pool 因子逐日截面 Pearson 相关的时间序列均值，
+    #    取绝对值最大者。factor_library_dir 为空 / registry 缺失 / 库为空时 max_corr
+    #    保持 None，跳过该阶段。
+    max_corr: float | None = None
+    if factor_library_dir is not None:
+        try:
+            library_values = load_library_values(factor_library_dir, factor_input)
+            if library_values:
+                max_corr = max_library_corr(raw_output, library_values).max_corr
+        except Exception as exc:  # noqa: BLE001 - registry 非法等归 metrics 阶段
+            return _failure(
+                "metrics",
+                f"相关性查重失败：{exc}",
+                complexity=complexity_dict,
+                truncation=truncation_dict,
+            )
+    metrics["max_corr"] = max_corr
+    metrics["corr_discount"] = _corr_discount(max_corr)
+
+    # 8. 门控。共线性折扣已写进 metrics（score = quality × corr_discount），门控只是
+    #    兜底拒绝：max_corr 超阈值即判冗余，与 IC 门控一并决定入库。
     rank_ic_mean = metrics["rank_ic_mean"]
+    metrics["quality"] = rank_ic_mean if isinstance(rank_ic_mean, float) else None
     icir = metrics["icir"]
     mono = metrics["mono"]
+    redundant = isinstance(max_corr, float) and max_corr > MAX_CORR_REJECT
     gate_passed = (
         isinstance(rank_ic_mean, float)
         and rank_ic_mean >= RANK_IC_MIN
@@ -340,6 +417,7 @@ def evaluate_factor(
         and icir >= ICIR_MIN
         and isinstance(mono, float)
         and mono > MONO_MIN
+        and not redundant
     )
     return FactorEvaluation(
         ok=True,
@@ -378,6 +456,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--horizon", type=int, default=DEFAULT_HORIZON, help=f"标签 horizon，默认 {DEFAULT_HORIZON}"
     )
+    parser.add_argument(
+        "--factor-library-dir",
+        default=DEFAULT_FACTOR_LIBRARY_DIR,
+        help=f"因子库目录（含 registry.json），默认 {DEFAULT_FACTOR_LIBRARY_DIR}/；目录不存在则跳过查重",
+    )
     return parser
 
 
@@ -387,29 +470,46 @@ def _fmt(value: object, digits: int) -> str:
 
 
 def _notes(evaluation: FactorEvaluation) -> str:
-    """生成 ``score.json`` 的 ``notes`` 文本。"""
+    """生成 ``score.json`` 的 ``notes`` 文本，把质量分与共线性折扣拆开写。"""
     metrics = evaluation.metrics
     n_days = metrics.get("n_days")
+    max_corr = _fmt(metrics.get("max_corr"), 2)
     if not isinstance(n_days, int) or n_days == 0:
-        return "无有效 IC 日（n_days=0），score 记 0"
+        return f"无有效 IC 日（n_days=0），max_corr={max_corr}，score 记 0"
     body = (
         f"rank_ic={_fmt(metrics.get('rank_ic_mean'), 4)} "
         f"icir={_fmt(metrics.get('icir'), 2)} "
         f"mono={_fmt(metrics.get('mono'), 2)} "
-        f"n_days={n_days}"
+        f"max_corr={max_corr} "
+        f"n_days={n_days} "
+        f"{_discount_note(metrics)}"
     )
     return f"过门控：{body}" if evaluation.gate_passed else f"未过门控：{body}"
+
+
+def _discount_note(metrics: Metrics) -> str:
+    """把质量分与共线性折扣拆成可读片段，例如 ``quality=0.0260×(1-0.31)=score 0.0179``。
+
+    无 ``max_corr``（无库可查 / 未查重）时明示未折扣。
+    """
+    max_corr = metrics.get("max_corr")
+    if not isinstance(max_corr, float) or not math.isfinite(max_corr):
+        return "quality=rank_ic（无库可查，未折扣）"
+    magnitude = _corr_magnitude(max_corr)
+    return (
+        f"quality={_fmt(metrics.get('quality'), 4)}×(1-{magnitude:.2f})="
+        f"score {_discounted_score(metrics):.4f}"
+    )
 
 
 def _score_payload(evaluation: FactorEvaluation) -> dict[str, object]:
     """由评估结果构造 ``score.json`` 内容。
 
-    ``score = rank_ic_mean``（连续质量信号，可负）；n_days 为 0 时记 0.0。
+    ``score = quality × corr_discount``（连续质量信号，可负），两键随 ``details.metrics``
+    落盘；n_days 为 0 或质量分不可得时记 0.0。
     """
-    rank_ic_mean = evaluation.metrics.get("rank_ic_mean")
-    score = float(rank_ic_mean) if isinstance(rank_ic_mean, float) else 0.0
     return {
-        "score": score,
+        "score": _discounted_score(evaluation.metrics),
         "higher_is_better": True,
         "notes": _notes(evaluation),
         "details": {
@@ -439,7 +539,12 @@ def main(argv: list[str] | None = None) -> int:
         print("未读到任何行情，检查 --data-dir / --start / --end", file=sys.stderr)
         return 1
 
-    evaluation = evaluate_factor(Path(args.factor), data, horizon=args.horizon)
+    evaluation = evaluate_factor(
+        Path(args.factor),
+        data,
+        horizon=args.horizon,
+        factor_library_dir=Path(args.factor_library_dir),
+    )
     if not evaluation.ok:
         print(f"stage={evaluation.stage} error={evaluation.error}", file=sys.stderr)
         return 1
