@@ -49,6 +49,7 @@ import json
 import math
 import sys
 import traceback
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -290,6 +291,7 @@ def evaluate_factor(
     *,
     horizon: int = DEFAULT_HORIZON,
     factor_library_dir: str | Path | None = None,
+    library_values: Mapping[str, pl.DataFrame] | None = None,
 ) -> FactorEvaluation:
     """对单个因子跑完整评估管线。
 
@@ -306,6 +308,12 @@ def evaluate_factor(
     故被拒的因子分数也已被压低，门控只是兜底。目录下无 ``registry.json`` 或库为空时
     跳过该阶段，``max_corr`` 为 None、``corr_discount`` 为 1.0，``score`` 等于
     ``rank_ic_mean``，行为与不传该参数一致。
+
+    批量回填等场景可先经 :func:`quant.factor_lib.correlation.load_library_values`
+    取一次库因子取值，再对每个被评因子传入 ``library_values``（排除自身后）复用，
+    既省去重复取数，也避免「库内含被评因子自身」导致自相关恒为 1.0 污染 ``max_corr``。
+    ``library_values`` 非 None 时直接采用，忽略 ``factor_library_dir``；为空映射时
+    与库为空同样跳过该阶段。
     """
     factor_path = Path(factor_path)
 
@@ -385,21 +393,25 @@ def evaluate_factor(
         )
 
     # 7. 行为相关性查重：与库内 pool 因子逐日截面 Pearson 相关的时间序列均值，
-    #    取绝对值最大者。factor_library_dir 为空 / registry 缺失 / 库为空时 max_corr
+    #    取绝对值最大者。library_values 由调用方给定（批量回填可复用并排除自身），
+    #    否则按 factor_library_dir 现取；两者皆空 / registry 缺失 / 库为空时 max_corr
     #    保持 None，跳过该阶段。
     max_corr: float | None = None
-    if factor_library_dir is not None:
-        try:
-            library_values = load_library_values(factor_library_dir, factor_input)
+    try:
+        if library_values is not None:
             if library_values:
                 max_corr = max_library_corr(raw_output, library_values).max_corr
-        except Exception as exc:  # noqa: BLE001 - registry 非法等归 metrics 阶段
-            return _failure(
-                "metrics",
-                f"相关性查重失败：{exc}",
-                complexity=complexity_dict,
-                truncation=truncation_dict,
-            )
+        elif factor_library_dir is not None:
+            loaded = load_library_values(factor_library_dir, factor_input)
+            if loaded:
+                max_corr = max_library_corr(raw_output, loaded).max_corr
+    except Exception as exc:  # noqa: BLE001 - registry 非法等归 metrics 阶段
+        return _failure(
+            "metrics",
+            f"相关性查重失败：{exc}",
+            complexity=complexity_dict,
+            truncation=truncation_dict,
+        )
     metrics["max_corr"] = max_corr
     metrics["corr_discount"] = _corr_discount(max_corr)
 
