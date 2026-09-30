@@ -14,6 +14,7 @@
 
     runs/orders/YYYY-MM-DD.parquet / .csv   # 调仓单
     runs/reports/YYYY-MM-DD.json            # 跑批报告
+    runs/reports/YYYY-MM-DD.md              # 每日简报（调仓明细 / 敞口 / 因子近端 RankIC）
     runs/account/<name>.json                # 虚拟账户状态
 
 不触网；行情来自 ``data/`` 缓存，模型来自 ``--model-dir``。
@@ -180,6 +181,8 @@ def _print_summary(report: DailyReport, elapsed: float) -> None:
         print(f"调仓单：{report.orders_path} / {report.orders_csv_path}")
     if report.report_path is not None:
         print(f"报告：{report.report_path}")
+    if report.briefing_path is not None:
+        print(f"简报：{report.briefing_path}")
     print(f"耗时 {elapsed:.1f}s")
 
 

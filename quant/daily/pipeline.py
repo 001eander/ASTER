@@ -60,6 +60,11 @@ from quant.backtest.broker import PRICE_EPSILON
 from quant.data.cache import load_bars, load_calendar
 from quant.data.schema import board_of
 from quant.data.validate import validate
+from quant.daily.briefing import (
+    build_briefing_risk_report,
+    recent_factor_ic,
+    write_briefing,
+)
 from quant.daily.strategy import (
     DEFAULT_STRATEGY,
     StrategyConfig,
@@ -202,6 +207,8 @@ class DailyReport:
         当前持仓摘要（列见 :data:`quant.daily.virtual_account.HOLDINGS_SCHEMA`）。
     exposure:
         敞口摘要：现金、持仓市值、nav、现金比例、持仓比例、持仓只数。
+    briefing_path:
+        每日 markdown 简报的落盘路径；``dry_run`` 或幂等跳过时为 ``None``。
     """
 
     date: date
@@ -237,6 +244,7 @@ class DailyReport:
     orders_path: Path | None = None
     orders_csv_path: Path | None = None
     report_path: Path | None = None
+    briefing_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -639,6 +647,15 @@ def run_daily(
         _write_orders(report.orders, report.orders_path, report.orders_csv_path)
         report.report_path = Path(reports_dir) / f"{signal_day.isoformat()}.json"
         _write_report(report, report.report_path)
+        report.briefing_path = Path(reports_dir) / f"{signal_day.isoformat()}.md"
+        _write_briefing(
+            data_dir=data_dir,
+            bars=bars,
+            factors=factors,
+            report=report,
+            signal_day=signal_day,
+            config=config,
+        )
         account.record_nav(signal_day, prices)
         account.last_pipeline_date = signal_day
         account.save(account_path)
@@ -1014,6 +1031,42 @@ def _write_report(report: DailyReport, path: Path) -> None:
     )
 
 
+def _write_briefing(
+    *,
+    data_dir: Path,
+    bars: pl.DataFrame,
+    factors: Mapping[str, FactorCompute],
+    report: DailyReport,
+    signal_day: date,
+    config: StrategyConfig,
+) -> None:
+    """渲染并落盘每日 markdown 简报（调仓明细 / 敞口 / 因子近端 RankIC）。
+
+    因子近期表现复用跑批已加载的 ``bars`` 与 ``factors``；行业敞口与指增风险四表
+    按当日 PIT 截面组装，数据不足时对应板块留扩展点。
+    """
+    instruments = (
+        sorted(set(report.holdings[INSTRUMENT_COL].to_list()))
+        if report.holdings.height
+        else []
+    )
+    industry_frame, _ = industry_table(data_dir, signal_day, instruments)
+    write_briefing(
+        report,
+        report.briefing_path,
+        factor_ic=recent_factor_ic(bars, factors, signal_day),
+        industry=industry_map(industry_frame),
+        risk_report=build_briefing_risk_report(
+            data_dir,
+            bars,
+            report,
+            benchmark=config.benchmark,
+            industry=industry_frame,
+        ),
+        notes=report.notes,
+    )
+
+
 def _report_dict(report: DailyReport) -> dict[str, Any]:
     """把报告转成可 JSON 序列化的字典。"""
 
@@ -1056,6 +1109,9 @@ def _report_dict(report: DailyReport) -> dict[str, Any]:
         "holdings": records(report.holdings),
         "exposure": report.exposure,
         "notes": report.notes,
+        "briefing_path": (
+            str(report.briefing_path) if report.briefing_path is not None else None
+        ),
     }
 
 
