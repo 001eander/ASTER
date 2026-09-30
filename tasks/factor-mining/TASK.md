@@ -72,7 +72,7 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 Context 判断 `stop` 的依据是 `score.json` 里 `details.gate_passed == true`。这等价于同时满足：
 
 - `rank_ic_mean ≥ 0.02`
-- `icir ≥ 0.2`
+- `icir ≥ 0.5`
 - 分层单调性 `mono > 0`
 - 与库内 pool 因子的行为相关性 `max_corr ≤ 0.7`（`|max_corr| > 0.7` 即判冗余拒绝；库内无因子可查时该项跳过）
 - 截断重算与复杂度全部通过

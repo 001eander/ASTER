@@ -162,7 +162,7 @@ $env:HYRA_PI_EXTRA_MOUNTS = "$PWD/data:/data:ro"   # 数据只读挂载，多条
 node dist/cli.js run --task tasks/factor-mining --proposals 3 --budget 30m
 ```
 
-因子契约与过关线见 `tasks/factor-mining/TASK.md`：RankIC ≥ 0.02、ICIR ≥ 0.2、分层单调性为正、与库内因子相关性 ≤ 0.7，截断重算与复杂度卡控全过才入库。
+因子契约与过关线见 `tasks/factor-mining/TASK.md`：RankIC ≥ 0.02、ICIR ≥ 0.5、分层单调性为正、与库内因子相关性 ≤ 0.7，截断重算与复杂度卡控全过才入库。
 
 入库不自动执行：过门控因子由人工确认后跑 `uv run python scripts/promote_factor.py ...` 登记进 `factor_library/`，流程与参数见 `factor_library/README.md`。
 

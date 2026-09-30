@@ -91,7 +91,7 @@ from quant.labels import attach_label
 RANK_IC_MIN: float = 0.02
 
 #: ICIR 下限，低于此值不过门控；ICIR 为 None 时同样不过。
-ICIR_MIN: float = 0.2
+ICIR_MIN: float = 0.5
 
 #: 分层单调性下限（Spearman），严格要求大于此值。
 MONO_MIN: float = 0.0
