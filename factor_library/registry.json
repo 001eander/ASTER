@@ -118,7 +118,7 @@
       "metrics": {
         "rank_ic": -0.03816452470885256,
         "icir": -0.41841288219451395,
-        "max_corr": 0.2601907028092164
+        "max_corr": 0.3425508673142284
       },
       "direction": {
         "signal_source": "price_volume",
@@ -284,6 +284,116 @@
         "parents": [],
         "run_id": null,
         "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "four_leg_ensemble_rank",
+      "hypothesis": "收益分解 + 量能二阶矩 + K 线形状 + Amihud 四腿等权 rank 合成",
+      "code_path": "factor_library/four_leg_ensemble_rank.py",
+      "metrics": {
+        "rank_ic": 0.049668469823415946,
+        "icir": 0.41574904454189265,
+        "max_corr": 0.6790039626714482
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "ensemble"
+      },
+      "lineage": {
+        "op": "crossover",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "overnight_intraday_spread_60",
+      "hypothesis": "隔夜与日内收益价差的 60 日标准化累计",
+      "code_path": "factor_library/overnight_intraday_spread_60.py",
+      "metrics": {
+        "rank_ic": 0.03789223071176963,
+        "icir": 0.3020057979772834,
+        "max_corr": 0.6175989042891765
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "long",
+        "mechanism": "return_decomposition"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "overnight_intraday_spread_20",
+      "hypothesis": "隔夜与日内收益价差的 20 日累计，分解收益来源",
+      "code_path": "factor_library/overnight_intraday_spread_20.py",
+      "metrics": {
+        "rank_ic": 0.04128568608878944,
+        "icir": 0.3230347614935729,
+        "max_corr": 0.6790039626714482
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "return_decomposition"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "three_leg_ic_weighted_cv40",
+      "hypothesis": "三腿加权合成沿时间尺度轴变异：量能 CV 腿 20→40 日",
+      "code_path": "factor_library/three_leg_ic_weighted_cv40.py",
+      "metrics": {
+        "rank_ic": 0.036444335377890574,
+        "icir": 0.41097163372183626,
+        "max_corr": 0.6268749988948937
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "ensemble"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "vol_cv_20_neg",
+      "hypothesis": "20 日成交量变异系数取负，量能平稳的票筹码锁定更好",
+      "code_path": "factor_library/vol_cv_20_neg.py",
+      "metrics": {
+        "rank_ic": 0.02855332947390038,
+        "icir": 0.4298933828971776,
+        "max_corr": 0.6144416347163031
+      },
+      "direction": {
+        "signal_source": "volume",
+        "time_scale": "medium",
+        "mechanism": "volume_dispersion"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
       },
       "status": "pool"
     }
