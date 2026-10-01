@@ -118,7 +118,7 @@
       "metrics": {
         "rank_ic": -0.03816452470885256,
         "icir": -0.41841288219451395,
-        "max_corr": 0.3425508673142284
+        "max_corr": 0.37208783274508306
       },
       "direction": {
         "signal_source": "price_volume",
@@ -388,6 +388,28 @@
         "signal_source": "volume",
         "time_scale": "medium",
         "mechanism": "volume_dispersion"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "pv_direction_concordance_20_neg",
+      "hypothesis": "20 日量价方向同步率取负，缩量背离越多的票越看多",
+      "code_path": "factor_library/pv_direction_concordance_20_neg.py",
+      "metrics": {
+        "rank_ic": 0.027403498418289048,
+        "icir": 0.359859264591876,
+        "max_corr": 0.37208783274508306
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "price_volume_corr"
       },
       "lineage": {
         "op": "mutation",
