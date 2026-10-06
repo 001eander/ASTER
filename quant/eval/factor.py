@@ -80,7 +80,14 @@ from quant.factor_api.truncation import (
     TruncationResult,
     check_truncation,
 )
-from quant.factor_lib.correlation import load_library_values, max_library_corr
+# load_library_values 仍从本模块重新导出：文档与测试把它当作查重阶段的取库入口
+# （tests/test_eval_factor.py 会 monkeypatch 这个名字），生产路径改走逐条取的
+# iter_library_values，两者取值口径相同，只差生命周期。
+from quant.factor_lib.correlation import (  # noqa: F401
+    iter_library_values,
+    load_library_values,
+    max_library_corr,
+)
 from quant.labels import attach_label
 
 # ---------------------------------------------------------------------------
@@ -313,7 +320,9 @@ def evaluate_factor(
     取一次库因子取值，再对每个被评因子传入 ``library_values``（排除自身后）复用，
     既省去重复取数，也避免「库内含被评因子自身」导致自相关恒为 1.0 污染 ``max_corr``。
     ``library_values`` 非 None 时直接采用，忽略 ``factor_library_dir``；为空映射时
-    与库为空同样跳过该阶段。
+    与库为空同样跳过该阶段。未给 ``library_values`` 时按 ``factor_library_dir``
+    逐条取库（:func:`quant.factor_lib.correlation.iter_library_values`），峰值内存不随
+    库内因子数增长。
     """
     factor_path = Path(factor_path)
 
@@ -393,18 +402,23 @@ def evaluate_factor(
         )
 
     # 7. 行为相关性查重：与库内 pool 因子逐日截面 Pearson 相关的时间序列均值，
-    #    取绝对值最大者。library_values 由调用方给定（批量回填可复用并排除自身），
-    #    否则按 factor_library_dir 现取；两者皆空 / registry 缺失 / 库为空时 max_corr
-    #    保持 None，跳过该阶段。
+    #    取绝对值最大者。库因子取值逐条取、算完即弃（iter_library_values），峰值内存
+    #    不随库规模增长：整库同时驻留会随库增长线性吃内存，沙盒容器的内存上限下会被
+    #    OOM 杀掉，评估写不出 score.json。批量回填等场景可先经
+    #    quant.factor_lib.correlation.load_library_values 取一次库因子取值，再对每个被评
+    #    因子传入 library_values（排除自身后）复用，既省去重复取数，也避免「库内含被评
+    #    因子自身」导致自相关恒为 1.0 污染 max_corr。
+    #    library_values 非 None 时直接采用，忽略 factor_library_dir；为空映射时
+    #    与库为空同样跳过该阶段。
     max_corr: float | None = None
     try:
         if library_values is not None:
             if library_values:
                 max_corr = max_library_corr(raw_output, library_values).max_corr
         elif factor_library_dir is not None:
-            loaded = load_library_values(factor_library_dir, factor_input)
-            if loaded:
-                max_corr = max_library_corr(raw_output, loaded).max_corr
+            max_corr = max_library_corr(
+                raw_output, iter_library_values(factor_library_dir, factor_input)
+            ).max_corr
     except Exception as exc:  # noqa: BLE001 - registry 非法等归 metrics 阶段
         return _failure(
             "metrics",

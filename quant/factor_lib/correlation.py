@@ -16,12 +16,21 @@
 （``method="pearson"``）与 :func:`summarize_ic`，不另造指标语义（AGENTS.md 量化纪律第 2 条）。
 库因子取值用 :func:`quant.factor_api.loader.load_factor` 按 registry 的 ``code_path``
 动态加载，在同一份输入面板上现算，仓库根为因子库目录的父目录。
+
+内存口径
+--------
+库因子值长表与输入面板同量级（全市场 × 六年约 630 万行），整库同时驻留会让查重阶段的
+内存随库内因子数线性上升，在内存受限的沙盒容器（``eval.sh``）里会被 OOM 杀掉，评估直接
+拿不到 ``score.json``。因此单次评估走 :func:`iter_library_values` 逐条取库、算完即弃
+（峰值 = 面板 + 新因子值 + 单个库因子值，与库规模无关），:func:`max_library_corr` 同时
+接受映射与可迭代对象；需要一次取库多次复用的批量脚本继续用 :func:`load_library_values`
+（二者取值口径完全相同，只差生命周期）。
 """
 from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,18 +131,27 @@ def cross_section_corr(
 
 def max_library_corr(
     new_values: pl.DataFrame,
-    library_values: Mapping[str, pl.DataFrame],
+    library_values: Mapping[str, pl.DataFrame] | Iterable[tuple[str, pl.DataFrame]],
     *,
     min_count: int = MIN_CROSS_SECTION_COUNT,
 ) -> CorrelationReport:
     """对整库逐个算 :func:`cross_section_corr`，汇总绝对值最大者。
 
+    ``library_values`` 既可以是 ``{factor_id: 值长表}`` 映射，也可以是
+    ``(factor_id, 值长表)`` 的可迭代对象（如 :func:`iter_library_values` 的生成器）。
+    传可迭代对象时每个库因子取值「算完即弃」，峰值内存不随库内因子数增长：库因子
+    值长表与面板同量级，整库同时驻留会让查重阶段的内存占用随库线性上升，在内存受限的
+    沙盒容器里会被 OOM 杀掉（同一份取值口径，区别只在生命周期）。
+
     库为空（``library_values`` 没有条目）或所有库因子的相关系数都不可得时，
     ``max_corr`` 为 None。
     """
+    pairs: Iterable[tuple[str, pl.DataFrame]] = (
+        library_values.items() if isinstance(library_values, Mapping) else library_values
+    )
     per_factor = {
         factor_id: cross_section_corr(new_values, values, min_count=min_count)
-        for factor_id, values in library_values.items()
+        for factor_id, values in pairs
     }
     magnitudes = [
         abs(value)
@@ -151,24 +169,28 @@ def max_library_corr(
 # ---------------------------------------------------------------------------
 
 
-def load_library_values(
+def iter_library_values(
     factor_library_dir: str | Path,
     data: pl.DataFrame,
-) -> dict[str, pl.DataFrame]:
-    """加载库内 pool 因子并在 ``data`` 上现算，返回 ``{factor_id: 值长表}``。
+) -> Iterator[tuple[str, pl.DataFrame]]:
+    """逐个产出库内 pool 因子的取值 ``(factor_id, 值长表)``，取值即用即弃。
 
-    - ``factor_library_dir`` 下没有 ``registry.json`` 时返回空 dict（跳过查重）。
+    口径与 :func:`load_library_values` 完全一致（同一 registry、同一 ``code_path`` 解析、
+    同样的单因子失败跳过策略），区别只在生命周期：这里不把整库取值同时留在内存里。
+    单次评估只需要「新因子 × 一个库因子」的截面，逐条产出把峰值压到
+    「面板 + 新因子值 + 单个库因子值」量级，与库内因子数无关。
+
+    - ``factor_library_dir`` 下没有 ``registry.json`` 时不产出任何条目（跳过查重）。
     - ``code_path`` 相对路径按因子库目录的父目录（仓库根）解析。
     - 单个因子文件缺失、加载失败或计算抛错时跳过该因子并写 warning，不阻断整次评估；
       registry 本身非法仍由 :func:`load_registry` 抛 ``FactorLibError``。
     """
     root = Path(factor_library_dir)
     if not registry_path(root).is_file():
-        return {}
+        return
 
     registry = load_registry(root)
     repo_root = root.resolve().parent
-    values: dict[str, pl.DataFrame] = {}
     for entry in pool_factors(registry):
         code_path = Path(entry.code_path)
         if not code_path.is_absolute():
@@ -182,8 +204,24 @@ def load_library_values(
         except Exception as exc:  # noqa: BLE001 - 单个库因子失败不阻断本次评估
             logger.warning("库因子 %s 计算失败，跳过查重：%s", entry.factor_id, exc)
             continue
-        values[entry.factor_id] = output.select(DATE_COL, INSTRUMENT_COL, VALUE_COL)
-    return values
+        yield entry.factor_id, output.select(DATE_COL, INSTRUMENT_COL, VALUE_COL)
+
+
+def load_library_values(
+    factor_library_dir: str | Path,
+    data: pl.DataFrame,
+) -> dict[str, pl.DataFrame]:
+    """加载库内 pool 因子并在 ``data`` 上现算，返回 ``{factor_id: 值长表}``。
+
+    批量场景（一次取库、多次复用，如 registry 指标回填）用本函数；单次评估只需查重
+    一次时用 :func:`iter_library_values`，避免整库取值同时驻留（见 :func:`max_library_corr`）。
+
+    - ``factor_library_dir`` 下没有 ``registry.json`` 时返回空 dict（跳过查重）。
+    - ``code_path`` 相对路径按因子库目录的父目录（仓库根）解析。
+    - 单个因子文件缺失、加载失败或计算抛错时跳过该因子并写 warning，不阻断整次评估；
+      registry 本身非法仍由 :func:`load_registry` 抛 ``FactorLibError``。
+    """
+    return dict(iter_library_values(factor_library_dir, data))
 
 
 __all__ = [
@@ -191,6 +229,7 @@ __all__ = [
     "CorrelationReport",
     "VALUE_COL",
     "cross_section_corr",
+    "iter_library_values",
     "load_library_values",
     "max_library_corr",
 ]
