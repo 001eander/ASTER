@@ -199,8 +199,14 @@ def prepare_training_dataset(
     horizon: int = DEFAULT_HORIZON,
     max_rows: int = 0,
     seed: int = SAMPLING_SEED,
+    universe: str | None = None,
+    data_dir: str | Path = DEFAULT_DATA_DIR,
 ) -> tuple[pl.DataFrame, DatasetSummary]:
-    """``build_dataset`` + 丢弃不可训练行 + 可选抽样，返回 ``(数据集, 摘要)``。
+    """``build_dataset`` + 可选池内行过滤 + 丢弃不可训练行 + 可选抽样。
+
+    ``universe`` 非空时在 ``build_dataset`` 之后按池内 PIT 成员过滤数据集**行**：
+    因子与标签先在连续行情序列上算干净（rolling / shift 不跨出池洞），z-score
+    在全市场截面上做，与 run_daily 生产打分口径一致；过滤只决定哪些行参与训练。
 
     丢弃规则（与纪律一致，训练集不喂入无效标签）：
 
@@ -212,6 +218,10 @@ def prepare_training_dataset(
     if bars.height == 0:
         raise ValueError("行情为空，无法构造训练集")
     dataset = build_dataset(bars, factors, horizon=horizon)
+    if universe is not None:
+        dataset = filter_bars_to_universe(dataset, universe, data_dir=Path(data_dir))
+        if dataset.height == 0:
+            raise ValueError(f"股票池 {universe!r} 在行情窗口内没有成员")
     feature_columns = tuple(
         col for col in dataset.columns if col not in NON_FEATURE_COLUMNS
     )
@@ -288,8 +298,9 @@ def train_baseline(
     ``trainer`` 用于依赖注入（测试传假 trainer，跳过真实 AutoGluon 训练）；省略时按
     参数构造 :class:`BaselineTrainer`。
 
-    ``universe`` 非空时，行情先按池内 PIT 成员裁剪再进 :func:`build_dataset`，因此
-    截面 z-score 只在池内计算（与全市场口径不同）；池名会写进训练配置，供回测校验。
+    ``universe`` 非空时，因子与标签先在全量连续行情上计算（z-score 在全市场截面，
+    与 run_daily 生产口径一致），训练集再按池内 PIT 成员过滤行；池名会写进训练配置，
+    供回测校验。
     """
     started = time.monotonic()
     data_dir = Path(data_dir)
@@ -298,19 +309,20 @@ def train_baseline(
     if bars.height == 0:
         raise ValueError(f"行情窗口 [{start}, {end}] 内没有数据：{data_dir}")
 
-    if universe is not None:
-        bars = filter_bars_to_universe(bars, universe, data_dir=data_dir)
-        if bars.height == 0:
-            raise ValueError(
-                f"股票池 {universe!r} 在窗口 [{start}, {end}] 内没有行情"
-            )
-
     factors = discover_factors(factor_library_dir)
     dataset, summary = prepare_training_dataset(
-        bars, factors, horizon=horizon, max_rows=max_rows, seed=seed
+        bars,
+        factors,
+        horizon=horizon,
+        max_rows=max_rows,
+        seed=seed,
+        universe=universe,
+        data_dir=data_dir,
     )
     summary.universe = universe
-    summary.mean_daily_instruments = mean_daily_instruments(bars)
+    summary.mean_daily_instruments = (
+        mean_daily_instruments(bars) if universe is None else mean_daily_instruments(dataset)
+    )
     logger.info(
         "训练集：%d 行 / %d 只 / %d 个交易日（原始 %d 行，label 空 %d，全特征空 %d）",
         summary.kept_rows,

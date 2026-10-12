@@ -27,9 +27,11 @@ JSON，在 ``[start, end]`` 区间跑一次完整的 :class:`~quant.backtest.eng
 
 股票池的两套行情窗口
 --------------------
-``universe`` 非空时，因子 / 打分 / 数据集用**逐日 PIT 成员**裁剪的行情（截面 z-score
-只在池内算）；引擎撮合与估值另用「窗口内曾属于该池」的并集行情，否则调样后离池的
-持仓既卖不掉也补不到价（broker 按当日无行情判停牌）。两套窗口都不含 cutoff 之后的信息。
+``universe`` 非空时，因子与标签先在**全量连续行情**上计算（截面 z-score 在全市场，
+与 ``run_daily`` 生产口径一致），数据集行再按**逐日 PIT 成员**过滤后才打分——先裁剪
+会让单票序列出现「出池洞」，rolling / shift 跨洞取错数据（issue #120）。引擎撮合与
+估值另用「窗口内曾属于该池」的并集行情，否则调样后离池的持仓既卖不掉也补不到价
+（broker 按当日无行情判停牌）。两套窗口都不含 cutoff 之后的信息。
 
 信号函数（T 日收盘后被引擎调用，只读实时 ``Account``）
 -----------------------------------------------------
@@ -952,7 +954,7 @@ def run_e2e(
     elif trainer is None:
         raise E2EError(f"缺少训练配置且未注入 trainer：{config_path}")
 
-    # -- 训练 / 回测股票池一致性：训练在池内做截面 z-score，回测必须同池 ----------
+    # -- 训练 / 回测股票池一致性：训练与回测必须在同一池上行过滤 ------------------
     trained_universe = train_config.universe if train_config is not None else None
     if trained_universe != config.universe:
         raise E2EError(
@@ -978,21 +980,25 @@ def run_e2e(
     #: 持仓仍能卖出 / 估值（逐日 PIT 裁剪会让离池票在 broker 眼里变成停牌）。
     engine_bars = loaded
     if config.universe is not None:
-        bars = filter_bars_to_universe(loaded, config.universe, data_dir=config.data_dir)
-        if bars.height == 0:
-            raise E2EError(f"股票池 {config.universe!r} 在窗口内没有行情")
         pool = members_range(
             config.universe, window_start, config.end, data_dir=config.data_dir
         )
+        if pool.height == 0:
+            raise E2EError(f"股票池 {config.universe!r} 在窗口内没有行情")
         engine_bars = loaded.filter(
             pl.col(INSTRUMENT_COL).is_in(pool[INSTRUMENT_COL].unique().to_list())
         )
-    universe_mean_daily = mean_daily_instruments(bars)
+        universe_mean_daily = mean_daily_instruments(pool)
+    else:
+        universe_mean_daily = mean_daily_instruments(loaded)
     actions = load_corporate_actions(
         config.data_dir, start=config.start, end=config.end
     )
 
     # -- 因子 → 数据集 → 一次性打分 ------------------------------------------
+    #: 因子与标签在全量连续行情上计算：rolling / shift 不跨出池洞，z-score 在全市场
+    #: 截面，与 run_daily 生产打分口径一致；之后按池内 PIT 成员过滤数据集行再打分
+    #: （predict 按行独立，先过滤等价于生产的事后过滤，且省打分开销）。
     factors = discover_factors(config.factor_library_dir)
     feature_columns = list(factors)
     if train_config is not None and list(train_config.feature_columns) != feature_columns:
@@ -1000,7 +1006,11 @@ def run_e2e(
             "模型训练配置的特征列与当前因子库不一致："
             f"{train_config.feature_columns} != {feature_columns}"
         )
-    dataset = build_dataset(bars, factors, horizon=config.horizon)
+    dataset = build_dataset(loaded, factors, horizon=config.horizon)
+    if config.universe is not None:
+        dataset = filter_bars_to_universe(
+            dataset, config.universe, data_dir=config.data_dir
+        )
 
     active_trainer = trainer
     if active_trainer is None:

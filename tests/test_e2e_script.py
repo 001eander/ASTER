@@ -449,6 +449,56 @@ def test_train_baseline_universe_filters_and_records(tmp_path: Path) -> None:
     assert loaded.universe == "hs300"
 
 
+def test_train_baseline_universe_gap_does_not_stretch_labels(tmp_path: Path) -> None:
+    """issue #120 回归：股票中途出池时，训练标签按连续行情序列计算，不跨出池洞。
+
+    B 在 days[40:50] 出池。对信号日 days[37]、horizon=3：连续口径下标签是
+    open(days[38]) → open(days[41])；若先按成员裁剪行情再算标签，B 的自身序列
+    在 days[39] 后直接跳到 days[50]，第 4 行变成 days[51]，标签被跨洞拉伸。
+    """
+    data_dir, instruments, days = _write_data_dir(tmp_path)
+    inst_a, inst_b = instruments[0], instruments[1]
+    member_rows = [
+        {"date": day, "instrument": inst_a, "index_code": "000300"} for day in days
+    ] + [
+        {"date": day, "instrument": inst_b, "index_code": "000300"}
+        for day in days
+        if day < days[40] or day >= days[50]
+    ]
+    pl.DataFrame(member_rows, schema=INDEX_MEMBERS).write_parquet(
+        data_dir / "index_members.parquet"
+    )
+
+    bars = tb.load_bars(data_dir, start=days[0], end=days[-1])
+    factors = tb.discover_factors(FACTOR_LIBRARY)
+    dataset, _summary = tb.prepare_training_dataset(
+        bars, factors, horizon=3, universe="hs300", data_dir=data_dir
+    )
+
+    # 出池期间没有 B 的训练行；信号日在池内的行保留
+    assert dataset.filter(
+        (pl.col(INSTRUMENT_COL) == inst_b)
+        & (pl.col("date") >= days[40])
+        & (pl.col("date") < days[50])
+    ).height == 0
+    row = dataset.filter(
+        (pl.col(INSTRUMENT_COL) == inst_b) & (pl.col("date") == days[37])
+    )
+    assert row.height == 1
+
+    def open_of(instrument: str, day: date) -> float:
+        return float(
+            bars.filter(
+                (pl.col(INSTRUMENT_COL) == instrument) & (pl.col("date") == day)
+            )["open"][0]
+        )
+
+    expected = open_of(inst_b, days[41]) / open_of(inst_b, days[38]) - 1.0
+    stretched = open_of(inst_b, days[51]) / open_of(inst_b, days[38]) - 1.0
+    assert float(row["label"][0]) == pytest.approx(expected)
+    assert abs(float(row["label"][0]) - stretched) > 1e-6
+
+
 # ---------------------------------------------------------------------------
 # run_e2e：端到端走通
 # ---------------------------------------------------------------------------
@@ -560,7 +610,7 @@ def test_run_e2e_missing_config_without_trainer_raises(tmp_path: Path) -> None:
 
 
 def test_run_e2e_universe_mismatch_raises(tmp_path: Path) -> None:
-    """训练配置有 universe 而回测没给 → 报错（训练在池内 z-score，不能混用）。"""
+    """训练配置有 universe 而回测没给 → 报错（训练集按池过滤行，不能混用）。"""
     data_dir, instruments, days = _write_data_dir(tmp_path)
     _write_index_members(data_dir, days, instruments[:3])
     factors = tb.discover_factors(FACTOR_LIBRARY)

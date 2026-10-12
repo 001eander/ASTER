@@ -327,12 +327,14 @@ def build_rolling_trainset(
     bars = load_bars(data_dir, start=load_start, end=signal_day)
     if bars.height == 0:
         raise ValueError(f"行情窗口 [{load_start}, {signal_day}] 内没有数据")
-    if universe is not None:
-        bars = filter_bars_to_universe(bars, universe, data_dir=data_dir)
-        if bars.height == 0:
-            raise ValueError(f"股票池 {universe!r} 在窗口内没有行情")
 
+    # 因子与标签在全量连续行情上计算（rolling / shift 不跨出池洞，z-score 全市场
+    # 截面，与生产打分口径一致），再按池内 PIT 成员过滤训练行。
     dataset = build_dataset(bars, factors, horizon=config.horizon)
+    if universe is not None:
+        dataset = filter_bars_to_universe(dataset, universe, data_dir=Path(data_dir))
+        if dataset.height == 0:
+            raise ValueError(f"股票池 {universe!r} 在窗口内没有成员")
     feature_columns = [
         col for col in dataset.columns
         if col not in (DATE_COL, "instrument", LABEL_COL, "delay_days")

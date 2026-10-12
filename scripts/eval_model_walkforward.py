@@ -1,7 +1,7 @@
 """walk-forward 模型级评估入口（issue #33）。
 
-链路：``load_bars`` → 池内裁决（可选）→ ``discover_factors`` →
-``build_dataset`` → :func:`quant.eval.model.evaluate_walk_forward` 逐窗口训练
+链路：``load_bars`` → ``discover_factors`` → ``build_dataset``（可选按池内 PIT
+成员过滤数据集行）→ :func:`quant.eval.model.evaluate_walk_forward` 逐窗口训练
 AutoGluon → 样本外拼接 → 指标汇总 → JSON / markdown / 样本外打分明细落盘。
 
 用法::
@@ -172,14 +172,16 @@ def main(argv: list[str] | None = None) -> int:
     bars = load_bars(data_dir, start=args.start, end=args.end)
     if bars.height == 0:
         raise SystemExit(f"行情窗口 [{args.start}, {args.end}] 内没有数据：{data_dir}")
-    if args.universe is not None:
-        bars = filter_bars_to_universe(bars, args.universe, data_dir=data_dir)
-        if bars.height == 0:
-            raise SystemExit(f"股票池 {args.universe!r} 在窗口内没有行情")
 
     factors = discover_factors(args.factor_library)
     logger.info("构造数据集：%d 个因子，%d 行行情", len(factors), bars.height)
     dataset = build_dataset(bars, factors, horizon=args.horizon)
+    # 因子与标签先在连续行情上算干净，再按池内 PIT 成员过滤数据集行
+    # （先过滤会让 rolling / shift 跨出池洞，z-score 截面也与生产不一致）。
+    if args.universe is not None:
+        dataset = filter_bars_to_universe(dataset, args.universe, data_dir=data_dir)
+        if dataset.height == 0:
+            raise SystemExit(f"股票池 {args.universe!r} 在窗口内没有成员")
     feature_columns = [
         col for col in dataset.columns if col not in NON_FEATURE_COLUMNS
     ]
