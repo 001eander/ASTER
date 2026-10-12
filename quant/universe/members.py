@@ -205,6 +205,13 @@ def filter_bars_to_universe(
 
     池内区间取行情表自己的 ``[min(date), max(date)]``，逐日匹配成员（无前视）。
     池在该区间没有记录时返回零行同 schema 表。列顺序与排序保持输入原样。
+
+    警示：本函数按行裁剪，会让单只证券的历史序列出现「出池洞」（出池期间没有
+    行）。**输出不可喂给含 rolling / shift 的计算**（因子、标签），否则窗口会
+    跨洞取到数月前的旧数据、shift 会跨洞拉伸 horizon。正确姿势是先对连续序列
+    完成全部 rolling / shift 计算，再用本函数（或对数据集行做同样的半连接）
+    按成员过滤行。本函数同样适用于数据集 / 打分类的 ``(date, instrument)``
+    长表。
     """
     if bars.height == 0:
         return bars

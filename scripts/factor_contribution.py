@@ -219,13 +219,15 @@ def build_dataset_for_args(args: argparse.Namespace) -> pl.DataFrame:
     bars = load_bars(data_dir, start=args.start, end=args.end)
     if bars.height == 0:
         raise SystemExit(f"行情窗口 [{args.start}, {args.end}] 内没有数据：{data_dir}")
-    if args.universe is not None:
-        bars = filter_bars_to_universe(bars, args.universe, data_dir=data_dir)
-        if bars.height == 0:
-            raise SystemExit(f"股票池 {args.universe!r} 在窗口内没有行情")
     factors = discover_factors(args.factor_library)
     logger.info("构造数据集：%d 个因子，%d 行行情", len(factors), bars.height)
-    return build_dataset(bars, factors, horizon=args.horizon)
+    dataset = build_dataset(bars, factors, horizon=args.horizon)
+    # 与 eval_model_walkforward 一致：先在连续行情上算因子与标签，再按成员过滤行。
+    if args.universe is not None:
+        dataset = filter_bars_to_universe(dataset, args.universe, data_dir=data_dir)
+        if dataset.height == 0:
+            raise SystemExit(f"股票池 {args.universe!r} 在窗口内没有成员")
+    return dataset
 
 
 # ---------------------------------------------------------------------------
