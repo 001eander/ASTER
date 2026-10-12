@@ -477,12 +477,12 @@ def test_flagship_strategy_config_loads_and_builds_optimizer() -> None:
     assert config.benchmark == "000300"
     assert config.top_k == 15
     assert config.rebalance_freq == "W"
-    assert config.optimize == {"w_max": 0.1, "max_turnover": 0.6, "kappa": 0.002}
+    assert config.optimize == {"w_max": 0.1, "max_turnover": 0.3, "kappa": 0.004}
 
     optimizer = build_stock_optimizer(config)
     assert optimizer.w_max == pytest.approx(0.1)
-    assert optimizer.max_turnover == pytest.approx(0.6)
-    assert optimizer.kappa == pytest.approx(0.002)
+    assert optimizer.max_turnover == pytest.approx(0.3)
+    assert optimizer.kappa == pytest.approx(0.004)
 
 
 def test_flagship_strategy_config_matches_backtest_cli() -> None:

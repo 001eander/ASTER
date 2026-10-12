@@ -66,6 +66,10 @@ OUT_DIR: str = "runs/flagship"
 TIME_LIMIT: int = 1800
 PRESETS: str = "medium_quality"
 
+#: 标签持有期：周频调仓持有约 5 个交易日，标签口径与持有期对齐（issue #120 后的
+#: 干净口径；horizon=1 的次日收益标签与周度持仓行为脱节）。
+HORIZON: int = 5
+
 #: AutoGluon 落盘的预测器文件，存在即视为模型已训练。
 PREDICTOR_FILE: str = "predictor.pkl"
 
@@ -137,6 +141,7 @@ def build_plan(
                     "--universe", universe,
                     "--time-limit", TIME_LIMIT,
                     "--presets", PRESETS,
+                    "--horizon", HORIZON,
                 ),
             )
         )
@@ -154,6 +159,7 @@ def build_plan(
                 "--rebalance-freq", config["rebalance_freq"],
                 "--initial-cash", INITIAL_CASH,
                 "--model-dir", MODEL_DIR,
+                "--horizon", HORIZON,
                 "--start", BACKTEST_START,
                 "--end", BACKTEST_END,
                 "--out-dir", OUT_DIR,
