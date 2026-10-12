@@ -147,7 +147,7 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
     """
     missing = [col for col in REQUIRED_COLUMNS if col not in data.columns]
     if missing:
-        raise ValueError(f"pv_four_leg_ensemble_rank 缺少输入列：{missing}")
+        raise ValueError(f"four_leg_ensemble_v2_rank 缺少输入列：{missing}")
 
     ordered = data.select(*REQUIRED_COLUMNS).sort(["instrument", "date"])
     sc = C("adjfactor")

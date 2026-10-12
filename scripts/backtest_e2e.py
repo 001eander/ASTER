@@ -1360,6 +1360,8 @@ def _render_benchmark_rows(
         f"{_fmt_pct(benchmark.tracking_error)} |",
         "| 信息比率（超额年化 / 跟踪误差） | "
         f"{_fmt_num(benchmark.information_ratio)} |",
+        "| 组合 beta（组合日收益对基准日收益回归） | "
+        f"{_fmt_num(benchmark.beta)} |",
     ]
 
 
@@ -1941,7 +1943,8 @@ def _print_summary(result: E2EResult) -> None:
             f"基准 {result.config.benchmark}：年化 {_fmt_pct(bench.benchmark_annualized)}    "
             f"超额年化 {_fmt_pct(bench.excess_annualized)}    "
             f"跟踪误差 {_fmt_pct(bench.tracking_error)}    "
-            f"IR {_fmt_num(bench.information_ratio)}"
+            f"IR {_fmt_num(bench.information_ratio)}    "
+            f"beta {_fmt_num(bench.beta)}"
         )
     print(
         f"优化：求解 {result.stats.optimize_calls} 次，放宽成功 {result.stats.relaxed_success} 次，"

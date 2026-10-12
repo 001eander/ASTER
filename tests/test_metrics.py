@@ -464,9 +464,38 @@ def test_benchmark_performance_no_overlap() -> None:
     assert summary.n_days == 0
     assert summary.benchmark_total_return is None
     assert summary.information_ratio is None
+    assert summary.beta is None
     assert benchmark_nav_series(
         _nav([(date(2024, 1, 2), 1.0)]), _close([(date(2024, 2, 2), 100.0)])
     ).height == 0
+
+
+def test_benchmark_performance_beta_hand_computed() -> None:
+    """组合日收益 = 2 × 基准日收益 + 1%，回归斜率（beta）应恰为 2。"""
+    days = [date(2024, 1, d) for d in (2, 3, 4, 5)]
+    bench_rets = [0.05, -0.02, 0.01]
+    bench_close = [1.0]
+    port_nav = [1.0]
+    for ret in bench_rets:
+        bench_close.append(bench_close[-1] * (1.0 + ret))
+        port_nav.append(port_nav[-1] * (1.0 + 2.0 * ret + 0.01))
+    portfolio = _nav(list(zip(days, port_nav)))
+    benchmark = _close(list(zip(days, bench_close)))
+
+    summary = benchmark_performance(portfolio, benchmark)
+
+    assert summary.beta == pytest.approx(2.0)
+
+
+def test_benchmark_performance_beta_none_when_benchmark_flat() -> None:
+    """基准收益方差为 0 时 beta 无定义，记 None。"""
+    days = [date(2024, 1, d) for d in (2, 3, 4)]
+    portfolio = _nav([(days[0], 1.0), (days[1], 1.1), (days[2], 1.05)])
+    benchmark = _close([(d, 100.0) for d in days])
+
+    summary = benchmark_performance(portfolio, benchmark)
+
+    assert summary.beta is None
 
 
 def test_benchmark_functions_require_columns() -> None:

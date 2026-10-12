@@ -93,7 +93,7 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
     """
     missing = [col for col in REQUIRED_COLUMNS if col not in data.columns]
     if missing:
-        raise ValueError(f"vol_spike_freq_20_neg 缺少输入列：{missing}")
+        raise ValueError(f"volume_spike_freq_20_neg 缺少输入列：{missing}")
 
     ordered = data.select(*REQUIRED_COLUMNS).sort(["instrument", "date"])
 

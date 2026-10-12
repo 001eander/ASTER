@@ -369,6 +369,9 @@ class BenchmarkSummary:
       有效超额收益少于 2 个时为 None。
     - ``information_ratio = excess_annualized / tracking_error``，跟踪误差为 0 或
       样本不足时为 None。
+    - ``beta`` 为组合日收益对基准日收益的回归斜率
+      （``cov(r_p, r_b) / var(r_b)``，``ddof=1``），有效样本少于 2 个或基准收益
+      方差为 0 时为 None。
 
     有效超额收益少于 2 个时除 ``n_days`` / 总值外各统计量为 None；无共同交易日时
     全部为 None 且 ``n_days=0``。
@@ -381,6 +384,7 @@ class BenchmarkSummary:
     excess_annualized: float | None
     tracking_error: float | None
     information_ratio: float | None
+    beta: float | None
 
 
 def benchmark_nav_series(
@@ -469,7 +473,7 @@ def benchmark_performance(
     series = benchmark_nav_series(portfolio_nav, benchmark_close)
     n_days = series.height
     if n_days == 0:
-        return BenchmarkSummary(0, None, None, None, None, None, None)
+        return BenchmarkSummary(0, None, None, None, None, None, None, None)
 
     benchmark_final = float(series[BENCHMARK_NAV_COL][-1])
     excess_final = float(series[EXCESS_NAV_COL][-1])
@@ -496,6 +500,20 @@ def benchmark_performance(
         tracking_error = None
         information_ratio = None
 
+    # 组合 beta：日收益对基准日收益的回归斜率（与超额统计同一对齐样本）。
+    beta: float | None = None
+    rp_raw = series.get_column(PORTFOLIO_RET_COL)
+    rb_raw = series.get_column(BENCHMARK_RET_COL)
+    valid = rp_raw.is_finite() & rb_raw.is_finite()
+    rp = rp_raw.filter(valid)
+    rb = rb_raw.filter(valid)
+    if rp.len() >= 2:
+        var_b = float(rb.var())
+        if var_b > 0.0:
+            # pl.cov 在当前 polars 版本返回 Expr，直接按定义手算样本协方差（ddof=1）。
+            cov = float(((rp - rp.mean()) * (rb - rb.mean())).sum()) / (rp.len() - 1)
+            beta = cov / var_b
+
     return BenchmarkSummary(
         n_days=n_days,
         benchmark_total_return=benchmark_total,
@@ -504,6 +522,7 @@ def benchmark_performance(
         excess_annualized=excess_annualized,
         tracking_error=tracking_error,
         information_ratio=information_ratio,
+        beta=beta,
     )
 
 

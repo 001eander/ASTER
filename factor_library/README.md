@@ -10,10 +10,13 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 约定（AGENTS.md 量化纪律第 3 条）：
 
 - 禁止网络 / 文件 IO，禁止随机性（同输入两次调用结果必须一致）。
-- 只能使用每行 `date` 当天及之前的同票数据；rolling / shift 窗口天然满足。
+- 只能使用每行 `date` 当天及之前的数据：rolling / shift 后向窗口天然满足；
+  当日截面聚合（`over("date")` 的 rank / 均值）用的是 T 日收盘后已知的同日横截面，
+  不构成前视，允许使用（集成类因子的腿部合成即走这一口径）。
 - 价格类因子用 `close × adjfactor` 等复权价；量额类因子不复权（同日内比值因子
   的复权因子自动约去）。
-- 输出 `(date, instrument, value)` 三列，缺失用 null，不做截面标准化。
+- 输出 `(date, instrument, value)` 三列，缺失用 null；单一口径因子不做截面标准化，
+  集成类因子可以把各腿截面 rank 后的等权 / 加权均值作为最终值。
 
 本期为 Alpha158 风格手工基线因子集（M1 基线 + 给 Agent 的示范）。
 

@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -53,13 +54,9 @@ BACKTEST_END: str = "2026-09-28"
 #: 本金口径：个人交易者样板 10 万。
 INITIAL_CASH: int = 100_000
 
-#: 策略参数，与 config/strategy-flagship.json 一致（backtest_e2e 会逐项校验）。
-STRATEGY: str = "stock_selection"
+#: 策略配置 JSON：strategy / universe / benchmark / top_k / rebalance_freq 的唯一真源，
+#: 本脚本不另存一份参数，直接读它拼回测命令（backtest_e2e 会逐项校验一致性）。
 STRATEGY_CONFIG: str = "config/strategy-flagship.json"
-UNIVERSE: str = "config/universe/flagship_pool.parquet"
-BENCHMARK: str = "000300"
-TOP_K: int = 15
-REBALANCE_FREQ: str = "W"
 
 #: 模型与产物目录。
 MODEL_DIR: str = "runs/automl/flagship"
@@ -94,8 +91,28 @@ def _script_argv(script: str, *args: object) -> tuple[str, ...]:
     )
 
 
-def build_plan(data_dir: str, *, force_retrain: bool = False) -> list[Step]:
-    """生成复现链路各步命令；模型已存在且未强制重训时训练步跳过。"""
+def _load_strategy_config(path: Path) -> dict[str, object]:
+    """读策略配置 JSON，缺文件或缺字段时直接报错（口径唯一真源，不默认兜底）。"""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    required = ("strategy", "universe", "benchmark", "top_k", "rebalance_freq")
+    missing = [key for key in required if key not in raw]
+    if missing:
+        raise ValueError(f"策略配置 {path} 缺少字段：{missing}")
+    return raw
+
+
+def build_plan(
+    data_dir: str,
+    *,
+    force_retrain: bool = False,
+    strategy_config_path: Path = Path(STRATEGY_CONFIG),
+) -> list[Step]:
+    """生成复现链路各步命令；模型已存在且未强制重训时训练步跳过。
+
+    回测步的策略参数逐项从 ``strategy_config_path`` 读取，与生产跑批共用同一份 JSON。
+    """
+    config = _load_strategy_config(strategy_config_path)
+    universe = str(config["universe"])
     steps = [
         Step(
             "数据校验",
@@ -117,7 +134,7 @@ def build_plan(data_dir: str, *, force_retrain: bool = False) -> list[Step]:
                     "--start", TRAIN_START,
                     "--end", TRAIN_END,
                     "--model-dir", MODEL_DIR,
-                    "--universe", UNIVERSE,
+                    "--universe", universe,
                     "--time-limit", TIME_LIMIT,
                     "--presets", PRESETS,
                 ),
@@ -129,12 +146,12 @@ def build_plan(data_dir: str, *, force_retrain: bool = False) -> list[Step]:
             _script_argv(
                 "backtest_e2e.py",
                 "--data-dir", data_dir,
-                "--strategy-config", STRATEGY_CONFIG,
-                "--strategy", STRATEGY,
-                "--universe", UNIVERSE,
-                "--benchmark", BENCHMARK,
-                "--top-k", TOP_K,
-                "--rebalance-freq", REBALANCE_FREQ,
+                "--strategy-config", str(strategy_config_path),
+                "--strategy", config["strategy"],
+                "--universe", universe,
+                "--benchmark", config["benchmark"],
+                "--top-k", config["top_k"],
+                "--rebalance-freq", config["rebalance_freq"],
                 "--initial-cash", INITIAL_CASH,
                 "--model-dir", MODEL_DIR,
                 "--start", BACKTEST_START,
@@ -150,6 +167,11 @@ def build_plan(data_dir: str, *, force_retrain: bool = False) -> list[Step]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="旗舰策略一条命令复现（issue #113）")
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR, help="缓存目录，默认 data/")
+    parser.add_argument(
+        "--strategy-config",
+        default=STRATEGY_CONFIG,
+        help=f"策略配置 JSON 路径，默认 {STRATEGY_CONFIG}",
+    )
     parser.add_argument(
         "--force-retrain",
         action="store_true",
@@ -167,7 +189,15 @@ def main(argv: list[str] | None = None) -> int:
         pass
 
     args = _build_parser().parse_args(argv)
-    steps = build_plan(args.data_dir, force_retrain=args.force_retrain)
+    try:
+        steps = build_plan(
+            args.data_dir,
+            force_retrain=args.force_retrain,
+            strategy_config_path=Path(args.strategy_config),
+        )
+    except (OSError, ValueError) as exc:
+        print(f"策略配置不可用：{exc}", file=sys.stderr)
+        return 2
     for index, step in enumerate(steps, 1):
         print(f"[{index}/{len(steps)}] {step.name}")
         print("      " + " ".join(step.argv))

@@ -107,7 +107,7 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
     """
     missing = [col for col in REQUIRED_COLUMNS if col not in data.columns]
     if missing:
-        raise ValueError(f"overnight_jump_share_20 缺少输入列：{missing}")
+        raise ValueError(f"overnight_jump_share_20_neg 缺少输入列：{missing}")
 
     # 后复权价；跨日比价一律用复权口径，除权跳空不进入隔夜段。
     adj_open = pl.col("open") * pl.col("adjfactor")

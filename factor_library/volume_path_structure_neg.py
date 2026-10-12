@@ -83,7 +83,7 @@ LAG: int = 1
 WARMUP: int = 25
 
 #: 腿数，用于等权平均（两条自相关腿 + 两条路径效率腿）。
-N_LEGS = 4.0
+N_LEGS: float = 4.0
 
 #: 本因子依赖的输入列。
 REQUIRED_COLUMNS: tuple[str, ...] = ("date", "instrument", "volume", "amount")
