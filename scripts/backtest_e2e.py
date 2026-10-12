@@ -1259,6 +1259,9 @@ def compute_metrics(result: BacktestResult) -> dict[str, Any]:
     drawdown = navs / peak - 1.0 if navs.size else navs
     max_drawdown = float(drawdown.min()) if drawdown.size else 0.0
     total_turnover = float(nav["turnover"].sum()) if n_days else 0.0
+    # 交易成本合计（佣金 + 印花税 + 滑点）与其占初始资金的比例：README / wiki 的
+    # 「费用占比」口径，衡量换手被费用侵蚀的程度。
+    total_fee = sum(fill.fee.total for fill in result.fills)
 
     reasons = Counter(str(rej.reason) for rej in result.rejects)
     return {
@@ -1270,6 +1273,8 @@ def compute_metrics(result: BacktestResult) -> dict[str, Any]:
         "max_drawdown": max_drawdown,
         "sharpe": sharpe,
         "total_turnover": total_turnover,
+        "total_fee": total_fee,
+        "fee_ratio": total_fee / result.initial_cash if result.initial_cash > 0.0 else 0.0,
         "n_fills": len(result.fills),
         "n_rejects": len(result.rejects),
         "reject_reasons": dict(reasons.most_common(TOP_REJECT_REASONS)),
@@ -1439,6 +1444,8 @@ def render_report(
     lines.append(f"| 最大回撤 | {metrics['max_drawdown']:.4%} |")
     lines.append(f"| 夏普（日频 √252，rf=0） | {metrics['sharpe']:.4f} |")
     lines.append(f"| 总换手（日换手之和） | {metrics['total_turnover']:.4f} |")
+    lines.append(f"| 交易成本合计（佣金 + 印花税 + 滑点，元） | {metrics['total_fee']:.2f} |")
+    lines.append(f"| 费用占初始资金 | {metrics['fee_ratio']:.4%} |")
     lines.append(f"| 成交笔数 | {metrics['n_fills']} |")
     lines.append(f"| 拒单笔数 | {metrics['n_rejects']} |")
     lines.append(f"| 公司行为处理笔数 | {metrics['n_corporate_actions']} |")

@@ -544,6 +544,11 @@ def test_run_e2e_stock_selection_weekly_rebalance(tmp_path: Path) -> None:
     for day in fill_days:
         previous_open = max(d for d in open_days if d < day)
         assert previous_open in set(rebalance_days)
+    # 费用合计口径：逐笔 fill.fee.total 之和，费用占比 = 合计 / 初始资金（issue #113）。
+    expected_fee = sum(fill.fee.total for fill in result.result.fills)
+    assert expected_fee > 0.0
+    assert result.metrics["total_fee"] == pytest.approx(expected_fee)
+    assert result.metrics["fee_ratio"] == pytest.approx(expected_fee / config.initial_cash)
 
 
 def test_run_e2e_infeasible_falls_back_to_hold(tmp_path: Path) -> None:
