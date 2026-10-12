@@ -220,6 +220,27 @@ describe("InspirationQueue", () => {
     expect(await again.enqueue(draft("量：隔夜跳空"))).toEqual({ ok: false, reason: "quota" });
   });
 
+  it("does not let completed (committed) holds consume quota after reload", async () => {
+    const { runDir, queue } = await newQueue({ highWater: 6, lowWater: 1, directionQuota: 1 });
+    const done = await queue.enqueue(draft("量：已完成"));
+    expect(done.ok).toBe(true);
+    if (!done.ok) return;
+    await queue.claim();
+    // 运行时 held 占名额，同组进不来。
+    expect(await queue.enqueue(draft("量：新的"))).toEqual({ ok: false, reason: "quota" });
+
+    // 重启时该灵感已进经验库：配额释放，同组新方向可入队，但方向仍算「用过」。
+    const again = await InspirationQueue.open(runDir, {
+      lowWater: 1,
+      highWater: 6,
+      directionQuota: 1,
+      knownIds: [done.id],
+    });
+    expect(again.isHeld(done.id)).toBe(false);
+    expect((await again.enqueue(draft("量：新的"))).ok).toBe(true);
+    expect(again.takenDirections()).toContain("量：已完成");
+  });
+
   it("reports a duplicate before it reports a quota", async () => {
     const { queue } = await newQueue({ highWater: 6, lowWater: 1, directionQuota: 1 });
     expect((await queue.enqueue(draft("量：放量反弹"))).ok).toBe(true);

@@ -118,7 +118,7 @@
       "metrics": {
         "rank_ic": -0.03816452470885256,
         "icir": -0.41841288219451395,
-        "max_corr": 0.2601907028092164
+        "max_corr": 0.37208783274508306
       },
       "direction": {
         "signal_source": "price_volume",
@@ -284,6 +284,292 @@
         "parents": [],
         "run_id": null,
         "generation": 0
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "four_leg_ensemble_rank",
+      "hypothesis": "收益分解 + 量能二阶矩 + K 线形状 + Amihud 四腿等权 rank 合成",
+      "code_path": "factor_library/four_leg_ensemble_rank.py",
+      "metrics": {
+        "rank_ic": 0.049668469823415946,
+        "icir": 0.41574904454189265,
+        "max_corr": 0.6790039626714482
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "ensemble"
+      },
+      "lineage": {
+        "op": "crossover",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "overnight_intraday_spread_60",
+      "hypothesis": "隔夜与日内收益价差的 60 日标准化累计",
+      "code_path": "factor_library/overnight_intraday_spread_60.py",
+      "metrics": {
+        "rank_ic": 0.03789223071176963,
+        "icir": 0.3020057979772834,
+        "max_corr": 0.6175989042891765
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "long",
+        "mechanism": "return_decomposition"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "overnight_intraday_spread_20",
+      "hypothesis": "隔夜与日内收益价差的 20 日累计，分解收益来源",
+      "code_path": "factor_library/overnight_intraday_spread_20.py",
+      "metrics": {
+        "rank_ic": 0.04128568608878944,
+        "icir": 0.3230347614935729,
+        "max_corr": 0.6790039626714482
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "return_decomposition"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "three_leg_ic_weighted_cv40",
+      "hypothesis": "三腿加权合成沿时间尺度轴变异：量能 CV 腿 20→40 日",
+      "code_path": "factor_library/three_leg_ic_weighted_cv40.py",
+      "metrics": {
+        "rank_ic": 0.036444335377890574,
+        "icir": 0.41097163372183626,
+        "max_corr": 0.6268749988948937
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "ensemble"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "vol_cv_20_neg",
+      "hypothesis": "20 日成交量变异系数取负，量能平稳的票筹码锁定更好",
+      "code_path": "factor_library/vol_cv_20_neg.py",
+      "metrics": {
+        "rank_ic": 0.02855332947390038,
+        "icir": 0.4298933828971776,
+        "max_corr": 0.6144416347163031
+      },
+      "direction": {
+        "signal_source": "volume",
+        "time_scale": "medium",
+        "mechanism": "volume_dispersion"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "pv_direction_concordance_20_neg",
+      "hypothesis": "20 日量价方向同步率取负，缩量背离越多的票越看多",
+      "code_path": "factor_library/pv_direction_concordance_20_neg.py",
+      "metrics": {
+        "rank_ic": 0.027403498418289048,
+        "icir": 0.359859264591876,
+        "max_corr": 0.37208783274508306
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "price_volume_corr"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "return_skew_20_neg",
+      "hypothesis": "20 日收益路径偏度取负，右偏（彩票型）股票看空",
+      "code_path": "factor_library/return_skew_20_neg.py",
+      "metrics": {
+        "rank_ic": 0.023997021526313556,
+        "icir": 0.30744916190496424,
+        "max_corr": 0.6594082811719246
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "skewness"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "overnight_jump_share_20_neg",
+      "hypothesis": "隔夜显著跳空占比取负，波动来自隔夜消息的股票看空",
+      "code_path": "factor_library/overnight_jump_share_20_neg.py",
+      "metrics": {
+        "rank_ic": 0.030814844008453593,
+        "icir": 0.3380724479912211,
+        "max_corr": 0.4405601978953724
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "overnight_jump"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "four_leg_ensemble_v2_rank",
+      "hypothesis": "路径效率 + 爆量频次 + 收益偏度 + 尾部厚度四腿等权 rank 合成",
+      "code_path": "factor_library/four_leg_ensemble_v2_rank.py",
+      "metrics": {
+        "rank_ic": 0.03099074710916954,
+        "icir": 0.3403257966711879,
+        "max_corr": 0.6594082811719246
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "ensemble"
+      },
+      "lineage": {
+        "op": "crossover",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "volume_spike_freq_20_neg",
+      "hypothesis": "20 日爆量频次占比取负，脉冲式天量频繁的股票看空",
+      "code_path": "factor_library/volume_spike_freq_20_neg.py",
+      "metrics": {
+        "rank_ic": 0.029467559540090397,
+        "icir": 0.36135235629594475,
+        "max_corr": 0.5819727651431091
+      },
+      "direction": {
+        "signal_source": "volume",
+        "time_scale": "medium",
+        "mechanism": "volume_spike"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "ret_sign_persistence_20_neg",
+      "hypothesis": "20 日显著异动方向延续占比取负，方向反复换手的票更看多",
+      "code_path": "factor_library/ret_sign_persistence_20_neg.py",
+      "metrics": {
+        "rank_ic": 0.04389029244808789,
+        "icir": 0.36524265036495585,
+        "max_corr": 0.6701816436963064
+      },
+      "direction": {
+        "signal_source": "price",
+        "time_scale": "medium",
+        "mechanism": "sign_persistence"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "volume_path_structure_neg",
+      "hypothesis": "成交活跃度路径结构（日变化自相关 + 路径效率）取负，轨迹杂乱的票做多",
+      "code_path": "factor_library/volume_path_structure_neg.py",
+      "metrics": {
+        "rank_ic": 0.021768847232412004,
+        "icir": 0.3478173763930439,
+        "max_corr": 0.3854223952341615
+      },
+      "direction": {
+        "signal_source": "volume",
+        "time_scale": "medium",
+        "mechanism": "volume_path"
+      },
+      "lineage": {
+        "op": "crossover",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
+      },
+      "status": "pool"
+    },
+    {
+      "factor_id": "vwap_bias_dispersion_20",
+      "hypothesis": "20 日收盘对 VWAP 偏离的超额离散度，刻画尾盘博弈强度",
+      "code_path": "factor_library/vwap_bias_dispersion_20.py",
+      "metrics": {
+        "rank_ic": 0.035532520348528086,
+        "icir": 0.3371295307068559,
+        "max_corr": 0.5635084134383422
+      },
+      "direction": {
+        "signal_source": "price_volume",
+        "time_scale": "medium",
+        "mechanism": "vwap_bias_dispersion"
+      },
+      "lineage": {
+        "op": "mutation",
+        "parents": [],
+        "run_id": "flagship-mining",
+        "generation": 1
       },
       "status": "pool"
     }

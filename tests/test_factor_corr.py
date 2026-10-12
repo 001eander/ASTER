@@ -14,6 +14,8 @@ import pytest
 
 from quant.factor_lib.correlation import (
     cross_section_corr,
+    iter_library_values,
+    load_library_values,
     max_library_corr,
 )
 
@@ -104,3 +106,134 @@ class TestMaxLibraryCorr:
 
         assert report.per_factor == {"tiny": None}
         assert report.max_corr is None
+
+    def test_iterable_input_matches_mapping(self) -> None:
+        """可迭代输入（查重阶段逐条取库的用法）与映射输入结果一致。"""
+        library = _panel(40, 6, _signal)
+        other = library.with_columns((pl.col("value") * 0.5 + 1.0).alias("value"))
+        new = library.with_columns((2.0 * pl.col("value") + 3.0).alias("value"))
+        mapping = {"a": library, "b": other}
+
+        from_mapping = max_library_corr(new, mapping)
+        from_iterable = max_library_corr(new, iter(mapping.items()))
+
+        assert from_iterable.per_factor == from_mapping.per_factor
+        assert from_iterable.max_corr == from_mapping.max_corr
+
+
+# ---------------------------------------------------------------------------
+# 逐条取库（OOM 口径）
+# ---------------------------------------------------------------------------
+
+
+_FACTOR_SOURCE = '''\
+"""测试用最小因子：value = close。"""
+
+import polars as pl
+
+
+def compute(data: pl.DataFrame) -> pl.DataFrame:
+    return data.select(
+        "date", "instrument", pl.col("close").cast(pl.Float64).alias("value")
+    )
+'''
+
+_BROKEN_FACTOR_SOURCE = """def compute(data):\n    raise RuntimeError("boom")\n"""
+
+
+def _registry_payload(code_path: str) -> dict[str, object]:
+    return {
+        "factor_id": code_path.rsplit("/", 1)[-1].removesuffix(".py"),
+        "hypothesis": "测试因子",
+        "code_path": code_path,
+        "metrics": {},
+        "direction": {
+            "signal_source": "price",
+            "time_scale": "short",
+            "mechanism": "test",
+        },
+        "lineage": {"op": "seed", "parents": [], "run_id": "test", "generation": 0},
+        "status": "pool",
+    }
+
+
+def _write_library(root: Path, entries: list[tuple[str, str]]) -> Path:
+    """在 ``root`` 下搭一个最小因子库：``factor_library/`` 含 registry 与因子文件。"""
+    import json
+
+    library_dir = root / "factor_library"
+    library_dir.mkdir(parents=True)
+    for filename, source in entries:
+        (library_dir / filename).write_text(source, encoding="utf-8")
+    payload = {
+        "version": 1,
+        "factors": [
+            _registry_payload(f"factor_library/{filename}") for filename, _ in entries
+        ],
+    }
+    (library_dir / "registry.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return library_dir
+
+
+def _factor_input() -> pl.DataFrame:
+    rows = []
+    for day in range(30):
+        for index in range(3):
+            rows.append(
+                {
+                    "date": START + dt.timedelta(days=day),
+                    "instrument": f"{600000 + index:06d}.SH",
+                    "open": 10.0,
+                    "high": 11.0,
+                    "low": 9.0,
+                    "close": 10.0 + index + day * 0.01,
+                    "vwap": 10.0,
+                    "volume": 1000.0,
+                    "amount": 10000.0,
+                    "adjfactor": 1.0,
+                    "limit_up": None,
+                    "limit_down": None,
+                }
+            )
+    return pl.DataFrame(rows)
+
+
+class TestIterLibraryValues:
+    def test_missing_registry_yields_nothing(self, tmp_path: Path) -> None:
+        assert list(iter_library_values(tmp_path, _factor_input())) == []
+        assert load_library_values(tmp_path, _factor_input()) == {}
+
+    def test_yields_pool_factor_values(self, tmp_path: Path) -> None:
+        library_dir = _write_library(tmp_path, [("close_factor.py", _FACTOR_SOURCE)])
+        data = _factor_input()
+
+        pairs = list(iter_library_values(library_dir, data))
+
+        assert [factor_id for factor_id, _ in pairs] == ["close_factor"]
+        values = pairs[0][1]
+        assert values.columns == ["date", "instrument", "value"]
+        assert values.height == data.height
+
+    def test_broken_factor_is_skipped(self, tmp_path: Path) -> None:
+        library_dir = _write_library(
+            tmp_path,
+            [("broken.py", _BROKEN_FACTOR_SOURCE), ("close_factor.py", _FACTOR_SOURCE)],
+        )
+
+        pairs = list(iter_library_values(library_dir, _factor_input()))
+
+        assert [factor_id for factor_id, _ in pairs] == ["close_factor"]
+
+    def test_load_library_values_matches_iter(self, tmp_path: Path) -> None:
+        """批量取库与逐条取库取值口径一致，只差生命周期。"""
+        library_dir = _write_library(tmp_path, [("close_factor.py", _FACTOR_SOURCE)])
+        data = _factor_input()
+
+        loaded = load_library_values(library_dir, data)
+        iterated = dict(iter_library_values(library_dir, data))
+
+        assert loaded.keys() == iterated.keys()
+        for factor_id in loaded:
+            assert loaded[factor_id].equals(iterated[factor_id])

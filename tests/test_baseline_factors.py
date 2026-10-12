@@ -195,8 +195,11 @@ def test_window_locality_suffix_recompute(name: str) -> None:
         .filter(pl.col("date").is_in(window_dates))
         .sort(["instrument", "date"])
     )
-    # 预热期在尾部 40 天内已满足，最后 20 天三个窗口类因子都应非 null
-    assert full["value"].null_count() == 0, name
+    # 预热期在尾部 40 天内已满足，最后 20 天窗口类因子都应非 null；阈值事件型因子
+    # （如 overnight_jump_share_20_neg：窗口内无显著波动日按契约记 null）在平稳的
+    # 合成序列上可以整段为 null，放宽为「存在非空值」，null 模式一致性由下面的
+    # 逐值对比覆盖（一侧 null 另一侧非 null 会判不一致）。
+    assert full["value"].null_count() < full.height, name
     _assert_close(full["value"], part["value"])
 
 

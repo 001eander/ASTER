@@ -15,6 +15,7 @@ from quant.factor_lib.correlation import (
     CORR_METHOD,
     CorrelationReport,
     cross_section_corr,
+    iter_library_values,
     load_library_values,
     max_library_corr,
 )
@@ -107,6 +108,7 @@ __all__ = [
     "capacity_limit",
     "cluster_corr_threshold",
     "cross_section_corr",
+    "iter_library_values",
     "load_library_values",
     "load_registry",
     "max_library_corr",

@@ -35,14 +35,14 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 
 - `value` 为 Float64。
 - 窗口不足等缺失情形用 null，不要填 0。
-- 不做截面标准化，不留中间列。
+- 单一口径因子不做截面标准化；集成类因子可以用当日截面 rank 合成（`rank().over("date")`），不留中间列。
 - 行序不作要求。
 
 ## 三条禁令
 
 1. 禁止网络与文件 IO。只允许基于传入的 DataFrame 计算，不读磁盘、不联网、不 import 数据源。
 2. 禁止随机性。同一输入必须得到同一输出，不引入任何随机数。
-3. 禁止使用当日之后的数据。`shift` 只能传正数，统计量只能用滚动窗口（`rolling_*`、`shift`、按 `over("instrument")` 的累积操作）。用全序列均值、排名、分位数回填历史会检出前视，直接零分。
+3. 禁止使用当日之后的数据。`shift` 只能传正数，统计量用滚动窗口（`rolling_*`、`shift`、按 `over("instrument")` 的累积操作）或当日截面聚合（`over("date")` 的 rank / 均值——T 日收盘后同日横截面已知，不算前视）。用全序列（含未来）的均值、排名、分位数回填历史会检出前视，直接零分。
 
 ## 写作要求
 
@@ -65,19 +65,29 @@ def compute(data: pl.DataFrame) -> pl.DataFrame:
 5. **截断重算**：抽样检测日，把数据截断到该日重算，与全量结果对比。检出前视即硬失败。
 6. **指标与行为查重**：RankIC 均值、ICIR、分层单调性、换手，以及与库内已入库因子（`status == "pool"`）的逐日截面相关均值 `max_corr`。
 
-跑完全流程则写出 `/work/score.json`：`score = quality × (1 - max_corr)`（可负，越高越好）。`quality` 为折扣前的 `rank_ic_mean`，`max_corr` 取绝对值最大者（库内无因子可查时为 None，折扣记 1.0），共线性越强分数越低；`higher_is_better` 为 true，`notes` 与 `details.metrics` 把 `quality` 与 `corr_discount` 拆开写。硬失败（崩溃、schema 不合规、前视、复杂度超标）由退出码非 0 表达，不写 `score.json`。
+跑完全流程则写出 `/work/score.json`：`score = quality × max(0, 1 - max_corr/0.7)`（可负，越高越好）。`quality` 为折扣前的 `rank_ic_mean`，`max_corr` 取绝对值最大者（库内无因子可查时为 None，折扣记 1.0）。折扣按门控阈值归一，`max_corr` 逼近 0.7 时分数趋零：挖掘目标是「IC 高且与库内低相关」，单看 IC 不够。`higher_is_better` 为 true，`notes` 与 `details.metrics` 把 `quality` / `corr_discount` / `corr_ok` / `corr_threshold` 拆开写。硬失败（崩溃、schema 不合规、前视、复杂度超标）由退出码非 0 表达，不写 `score.json`。
 
 ## 过关线
 
-Context 判断 `stop` 的依据是 `score.json` 里 `details.gate_passed == true`。这等价于同时满足：
+### 单因子过关线
+
+`score.json` 的 `details.gate_passed == true` 表示单个因子过线，等价于同时满足：
 
 - `rank_ic_mean ≥ 0.02`
-- `icir ≥ 0.2`
+- `icir ≥ 0.3`
 - 分层单调性 `mono > 0`
 - 与库内 pool 因子的行为相关性 `max_corr ≤ 0.7`（`|max_corr| > 0.7` 即判冗余拒绝；库内无因子可查时该项跳过）
 - 截断重算与复杂度全部通过
 
-五项缺一不可。注意共线性折扣已先行压低 `score`，`max_corr > 0.7` 的拒绝只是兜底，不存在「分数高却被拒」的隐藏规则。
+五项缺一不可。共线性折扣已先行压低 `score`，`max_corr > 0.7` 的拒绝只是兜底，不存在「分数高却被拒」的隐藏规则。
+
+### 任务过关线（Context 判 `stop` 的依据）
+
+本任务要的不是「单个最好因子过线」，而是为因子库凑出足够的低相关因子：
+
+- 因子库 `factor_library/registry.json` 中，由本内循环产出（`lineage.generation ≥ 1` 且 `status == pool`）、且指标满足单因子过关线（`metrics.rank_ic ≥ 0.02`、`metrics.icir ≥ 0.3`、`metrics.max_corr ≤ 0.7`）的因子，累计达到 **10 个**。
+- 只有这个累计数达标才写 `stop: true`；单个因子过线不等于任务完成。
+- 与已入库因子 `max_corr > 0.7` 的同质候选拿不到 `gate_passed`，必须换机制，而不是换窗口或符号。
 
 ## 数据
 

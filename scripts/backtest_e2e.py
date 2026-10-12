@@ -250,7 +250,8 @@ class E2EConfig:
     universe: str | None = None
     #: 策略枚举：``stock_selection`` / ``index_enhanced``（issue #71）。
     strategy: str = DEFAULT_STRATEGY
-    #: 指增调仓频率：``D`` / ``W`` / ``M``（仅 ``index_enhanced`` 生效）。
+    #: 调仓频率：``D`` / ``W`` / ``M``；``stock_selection`` 与 ``index_enhanced`` 均生效，
+    #: 非调仓日信号函数直接保持持仓（与 ``run_daily`` 生产路径同一口径）。
     rebalance_freq: str = DEFAULT_REBALANCE_FREQ
     #: 策略配置 JSON 路径；给了就用它的 ``optimize`` 等参数，并要求与上面各项一致。
     strategy_config_path: Path | None = None
@@ -312,6 +313,7 @@ class SignalStats:
     calls: int = 0
     optimize_calls: int = 0
     empty_score_days: int = 0
+    non_rebalance_days: int = 0
     relaxed_attempts: int = 0
     relaxed_success: int = 0
     hold_fallback: int = 0
@@ -531,15 +533,23 @@ def make_signal_fn(
     top_k: int,
     lookback_days: int,
     stats: SignalStats,
+    calendar: pl.DataFrame,
+    rebalance_freq: str,
 ) -> SignalFn:
     """构造引擎所需的 ``signal_fn(T, history, account) -> list[Order]``。
 
     ``history`` 由引擎保证只含 ``date <= T`` 的行；本实现改用预构造的面板并显式按
     ``date <= T`` 切片，口径与 ``history`` 等价（见模块 docstring 的无前视说明）。
+    调仓频率由 ``rebalance_freq`` 控制：非调仓日直接保持持仓（引擎按市值自然漂移），
+    与 ``run_daily`` 生产路径的调仓日门控同一口径（``quant.daily.pipeline``）。
     """
+    open_days = calendar.filter(pl.col("is_open"))[DATE_COL].to_list()
 
     def signal(day: date, _history: pl.DataFrame, account: Any) -> list[Order]:
         stats.calls += 1
+        if not is_rebalance_day(open_days, day, rebalance_freq):
+            stats.non_rebalance_days += 1
+            return []
         score_frame = score_by_day.get(day)
         if score_frame is None or score_frame.height == 0:
             stats.empty_score_days += 1
@@ -1065,6 +1075,8 @@ def run_e2e(
             top_k=config.top_k,
             lookback_days=config.lookback_days,
             stats=stats,
+            calendar=calendar,
+            rebalance_freq=strategy_config.rebalance_freq,
         )
 
     result = BacktestEngine(Broker(FeeModel())).run(
@@ -1257,6 +1269,9 @@ def compute_metrics(result: BacktestResult) -> dict[str, Any]:
     drawdown = navs / peak - 1.0 if navs.size else navs
     max_drawdown = float(drawdown.min()) if drawdown.size else 0.0
     total_turnover = float(nav["turnover"].sum()) if n_days else 0.0
+    # 交易成本合计（佣金 + 印花税 + 滑点）与其占初始资金的比例：README / wiki 的
+    # 「费用占比」口径，衡量换手被费用侵蚀的程度。
+    total_fee = sum(fill.fee.total for fill in result.fills)
 
     reasons = Counter(str(rej.reason) for rej in result.rejects)
     return {
@@ -1268,6 +1283,8 @@ def compute_metrics(result: BacktestResult) -> dict[str, Any]:
         "max_drawdown": max_drawdown,
         "sharpe": sharpe,
         "total_turnover": total_turnover,
+        "total_fee": total_fee,
+        "fee_ratio": total_fee / result.initial_cash if result.initial_cash > 0.0 else 0.0,
         "n_fills": len(result.fills),
         "n_rejects": len(result.rejects),
         "reject_reasons": dict(reasons.most_common(TOP_REJECT_REASONS)),
@@ -1353,6 +1370,8 @@ def _render_benchmark_rows(
         f"{_fmt_pct(benchmark.tracking_error)} |",
         "| 信息比率（超额年化 / 跟踪误差） | "
         f"{_fmt_num(benchmark.information_ratio)} |",
+        "| 组合 beta（组合日收益对基准日收益回归） | "
+        f"{_fmt_num(benchmark.beta)} |",
     ]
 
 
@@ -1437,6 +1456,8 @@ def render_report(
     lines.append(f"| 最大回撤 | {metrics['max_drawdown']:.4%} |")
     lines.append(f"| 夏普（日频 √252，rf=0） | {metrics['sharpe']:.4f} |")
     lines.append(f"| 总换手（日换手之和） | {metrics['total_turnover']:.4f} |")
+    lines.append(f"| 交易成本合计（佣金 + 印花税 + 滑点，元） | {metrics['total_fee']:.2f} |")
+    lines.append(f"| 费用占初始资金 | {metrics['fee_ratio']:.4%} |")
     lines.append(f"| 成交笔数 | {metrics['n_fills']} |")
     lines.append(f"| 拒单笔数 | {metrics['n_rejects']} |")
     lines.append(f"| 公司行为处理笔数 | {metrics['n_corporate_actions']} |")
@@ -1932,7 +1953,8 @@ def _print_summary(result: E2EResult) -> None:
             f"基准 {result.config.benchmark}：年化 {_fmt_pct(bench.benchmark_annualized)}    "
             f"超额年化 {_fmt_pct(bench.excess_annualized)}    "
             f"跟踪误差 {_fmt_pct(bench.tracking_error)}    "
-            f"IR {_fmt_num(bench.information_ratio)}"
+            f"IR {_fmt_num(bench.information_ratio)}    "
+            f"beta {_fmt_num(bench.beta)}"
         )
     print(
         f"优化：求解 {result.stats.optimize_calls} 次，放宽成功 {result.stats.relaxed_success} 次，"

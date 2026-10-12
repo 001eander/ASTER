@@ -91,7 +91,7 @@ flowchart TB
 - **无前视纪律**：信号 cutoff = T 日收盘，成交 = T+1 开盘价 + 滑点，标签 = T+1 开盘 → T+2 开盘收益。标签只在 `quant/labels/` 定义，IC / RankIC / ICIR / 分层只在 `quant/eval/metrics.py` 实现，三层回测共享同一套内核
 - **三层回测**：因子级（秒级，内循环高频调用）→ 模型级（walk-forward 样本外拼接）→ 账户级（完整费用与规则）
 - **账户模拟器一套两用**：历史回测由批量数据驱动，生产模式持久化为虚拟账户每日产出调仓单，回测与实盘的滑点偏差因此可量化
-- **奖励信号一致**：入库门控全部体现在 `score.json`（`score = quality × (1 − max_corr)`），Agent 学到的评分函数与入库规则没有出入
+- **奖励信号一致**：入库门控全部体现在 `score.json`（`score = quality × max(0, 1 − max_corr/0.7)`，相关性越强折扣越狠），Agent 学到的评分函数与入库规则没有出入
 - **共线性四层防御**：Context 方向分布地图源头分流 → Proposal 附同方向因子摘要要求机制差异 → 评分按与库内因子最大相关性折扣 → 入库行为查重（|corr| > 0.7 拒入）与定期整库
 - **面向协议编程**：数据源、因子、模型、策略配置均可替换，akshare 接口变动只需改 `quant/data/source/akshare.py`
 
@@ -111,6 +111,45 @@ flowchart TB
 - **指增直接对标实盘产品语言**：基准锚定约束族与指数 / 市值 / 风格 / 主动行业四张暴露表，对应私募指增的风控口径，zz1000 + 000852 已端到端验证
 - **因子库持续增值**：Agent 内循环可连续运转数天，入库因子带指标与血统记录，成为可复用、可审计的研究资产
 - **全链路本地化**：数据落 Parquet、模型本地训练、跑批无外部服务依赖，一台带显卡的机器即可完整运行
+
+## 旗舰策略展示（个人交易者样板）
+
+一条从 Agent 挖因子到账户级回测完整走通的样板策略：10 万本金、300 只高流动性股票池（季度刷新 PIT）、周频调仓、top_k=15 集中持仓、不做对冲的净多头。
+
+![旗舰策略净值 vs 沪深300](docs/flagship/nav.png)
+
+样本外区间 2025-01-02 ~ 2026-09-28（训练窗口 2021-09-29 ~ 2024-12-31，两者不重叠），基准沪深 300：
+
+| 指标 | 组合 | 基准 |
+| --- | ---: | ---: |
+| 总收益 | 13.66% | 13.62% |
+| 年化收益 | 7.95% | 7.92% |
+| 最大回撤 | -23.58% | — |
+| 夏普（日频 √252） | 0.41 | — |
+| 超额年化（算术） / 跟踪误差 / IR | 2.54% / 21.90% / 0.12 | — |
+| 实际 beta（对基准日收益回归） | 1.04 | — |
+| 总换手（日换手之和，422 个交易日） | 38.71 | — |
+| 交易成本合计 / 占初始资金 | 10015.93 元 / 10.02% | — |
+
+特征集 26 个因子 = 13 个种子因子 + 13 个 Agent 内循环产出（门控 RankIC ≥ 0.02、ICIR ≥ 0.3、与库内相关性 ≤ 0.7）。内循环因子清单与血统链：
+
+| 因子 | 血统 | RankIC | ICIR | MaxCorr | 机制 |
+| --- | --- | ---: | ---: | ---: | --- |
+| four_leg_ensemble_rank | crossover | 0.0497 | 0.416 | 0.679 | 四腿等权 rank 集成 |
+| ret_sign_persistence_20_neg | mutation | 0.0439 | 0.365 | 0.670 | 显著异动方向延续取负 |
+| overnight_intraday_spread_20 | mutation | 0.0413 | 0.323 | 0.679 | 隔夜-日内价差 20 日 |
+| overnight_intraday_spread_60 | mutation | 0.0379 | 0.302 | 0.618 | 隔夜-日内价差 60 日 |
+| three_leg_ic_weighted_cv40 | mutation | 0.0364 | 0.411 | 0.627 | 三腿 IC 加权集成 |
+| vwap_bias_dispersion_20 | mutation | 0.0355 | 0.337 | 0.564 | VWAP 偏离离散度 |
+| four_leg_ensemble_v2_rank | crossover | 0.0310 | 0.340 | 0.659 | 路径效率/爆量/偏度/尾部四腿 |
+| overnight_jump_share_20_neg | mutation | 0.0308 | 0.338 | 0.441 | 隔夜显著跳空占比取负 |
+| volume_spike_freq_20_neg | mutation | 0.0295 | 0.361 | 0.582 | 爆量频次占比取负 |
+| vol_cv_20_neg | mutation | 0.0286 | 0.430 | 0.614 | 量能变异系数取负 |
+| pv_direction_concordance_20_neg | mutation | 0.0274 | 0.360 | 0.372 | 量价方向同步率取负 |
+| return_skew_20_neg | mutation | 0.0240 | 0.307 | 0.659 | 收益路径偏度取负 |
+| volume_path_structure_neg | crossover | 0.0218 | 0.348 | 0.385 | 量能路径结构取负 |
+
+**诚实声明**：几何口径下组合与基准基本打平（总收益 13.66% vs 13.62%），表中超额年化 +2.54% 是日频算术口径，两者的差来自 21.9% 跟踪误差的方差拖累；IR 0.12 属于噪声级，这段区间没有可辨识的主动收益。交易成本吞掉初始资金的 10.02%——10 万本金下最低佣金 5 元/笔相对数千元/笔的整手成交额占比显著，是小本金周频调仓的结构性成本。2026-10 修复了 universe 过滤顺序 bug（[#120](https://github.com/001eander/ASTER/issues/120)，训练标签跨出池洞拉伸），本表为修复后重训（标签持有期 5 日，对齐周频调仓）的结果；内循环因子的挖掘与门控评估使用了全样本行情，因子入选本身含全样本信息，上述「样本外」是相对训练窗口而言，不构成收益预期。完整配置、约束、风险暴露、迭代记录与复现命令见 [wiki 旗舰策略细节页](https://github.com/001eander/ASTER/wiki/Flagship-Strategy)。
 
 ## 快速开始
 
@@ -153,6 +192,12 @@ uv run python scripts/run_daily.py
 }
 ```
 
+旗舰样板（上文「旗舰策略展示」同款）在数据已抓取的前提下一条命令复现——数据校验 → 建池 → 训练（模型已存在则跳过）→ 端到端回测：
+
+```bash
+uv run python scripts/reproduce_flagship.py
+```
+
 ### 因子挖掘内循环
 
 ```powershell
@@ -162,7 +207,7 @@ $env:HYRA_PI_EXTRA_MOUNTS = "$PWD/data:/data:ro"   # 数据只读挂载，多条
 node dist/cli.js run --task tasks/factor-mining --proposals 3 --budget 30m
 ```
 
-因子契约与过关线见 `tasks/factor-mining/TASK.md`：RankIC ≥ 0.02、ICIR ≥ 0.2、分层单调性为正、与库内因子相关性 ≤ 0.7，截断重算与复杂度卡控全过才入库。
+因子契约与过关线见 `tasks/factor-mining/TASK.md`：RankIC ≥ 0.02、ICIR ≥ 0.3、分层单调性为正、与库内因子相关性 ≤ 0.7，截断重算与复杂度卡控全过才入库。
 
 入库不自动执行：过门控因子由人工确认后跑 `uv run python scripts/promote_factor.py ...` 登记进 `factor_library/`，流程与参数见 `factor_library/README.md`。
 
@@ -198,6 +243,7 @@ ASTER/
 ├── docker/               # 沙盒镜像（Python + 依赖，数据只读挂载）
 ├── factor_library/       # 因子代码 + registry.json（入 git）
 ├── scripts/              # 抓取 / 更新 / 训练 / 回测 / 跑批 CLI
+├── docs/                 # 展示用固化产物（旗舰策略净值图等，入 git）
 ├── tests/                # pytest
 ├── data/                 # 本地数据（不入 git）
 └── runs/                 # 运行记录（不入 git）
@@ -205,6 +251,7 @@ ASTER/
 
 ## 文档
 
+- [GitHub Wiki](https://github.com/001eander/ASTER/wiki)：架构总览、数据层、回测体系、策略配置参考、因子开发指南、内循环细节、[旗舰策略细节页](https://github.com/001eander/ASTER/wiki/Flagship-Strategy)
 - `AGENTS.md`：仓库约定与量化纪律
 - `factor_library/README.md`：因子接口约定、注册表 schema、整库规则与因子清单
 - `docker/README.md`：沙盒镜像构建与手动冒烟
