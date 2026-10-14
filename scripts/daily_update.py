@@ -59,6 +59,7 @@ from quant.data.cache import (  # noqa: E402
     IndustryReport,
     ProgressCallback,
     load_bars,
+    load_corporate_actions,
     load_instruments,
     update_corporate_actions,
     update_daily,
@@ -199,7 +200,9 @@ def recompute_limits(data_dir: Path, source: DataSource, years: list[int]) -> di
     """对指定年份重算涨跌停并写回，返回 ``{年份: 行数}``。
 
     每个年份连同前一年一起 ``load_bars``，让该年首个交易日的 ``prev_close`` 拿到
-    前一年最后一条收盘价；写回时只保留该年行，不动前一年文件。
+    前一年最后一条收盘价；写回时只保留该年行，不动前一年文件。公司行为表传入
+    ``compute_limits`` 用于除权日基准价（issue #60）；本函数在
+    ``update_corporate_actions`` 之后运行，除权日当天记录已在缓存中。
     """
     data_dir = Path(data_dir)
     counts: dict[int, int] = {}
@@ -207,6 +210,7 @@ def recompute_limits(data_dir: Path, source: DataSource, years: list[int]) -> di
         return counts
     instruments = load_instruments(data_dir)
     st = load_or_build_st(data_dir, source)
+    actions = load_corporate_actions(data_dir)
     bars_dir = data_dir / BARS_DIRNAME
 
     for year in sorted(set(years)):
@@ -216,7 +220,7 @@ def recompute_limits(data_dir: Path, source: DataSource, years: list[int]) -> di
         bars = load_bars(
             data_dir, start=date(year - 1, 1, 1), end=date(year, 12, 31)
         )
-        out = compute_limits(bars, instruments, st)
+        out = compute_limits(bars, instruments, st, actions)
         frame = (
             out.filter(pl.col("date").dt.year() == year)
             .sort(["instrument", "date"])

@@ -387,6 +387,53 @@ def test_daily_update_recomputes_limits_across_year_with_prev_close(
 
 
 # ---------------------------------------------------------------------------
+# 除权日基准价（issue #60）
+# ---------------------------------------------------------------------------
+
+
+def test_daily_update_ex_date_uses_factor_implied_base(tmp_path: Path) -> None:
+    """除权日（公司行为有记录且因子跳变）涨跌停基准价取因子隐含除权参考价。"""
+    adj_ex = 10.0 / 9.5  # 现金分红 0.5 元：除权参考价 ref = 9.5
+    bars = {
+        "600000.SH": [
+            _bar(date(2025, 12, 31), "600000.SH", close=10.0),
+            {**_bar(date(2026, 1, 2), "600000.SH", close=9.6), "adjfactor": adj_ex},
+        ]
+    }
+    info = _info("600000.SH")
+    actions = {
+        "600000.SH": [
+            {
+                "date": date(2026, 1, 2),
+                "instrument": "600000.SH",
+                "cash_per_share": 0.5,
+                "share_per_share": 0.0,
+            }
+        ]
+    }
+
+    fetch_full(
+        FakeSource(bars, info=info, actions=actions),
+        tmp_path,
+        start=date(2025, 1, 1),
+        end=date(2025, 12, 31),
+    )
+    _write_empty_st(tmp_path)
+
+    result = run_daily_update(
+        FakeSource(bars, info=info, actions=actions), tmp_path, end=date(2026, 1, 2)
+    )
+
+    assert result.limit_years == {2026: 1}
+    row = load_bars(tmp_path).filter(
+        (pl.col("instrument") == "600000.SH") & (pl.col("date") == date(2026, 1, 2))
+    )
+    # 基准价 9.5（而非前收 10.0）：limit = 9.5 × (1 ± 10%)
+    assert row["limit_up"].to_list() == [10.45]
+    assert row["limit_down"].to_list() == [8.55]
+
+
+# ---------------------------------------------------------------------------
 # 非交易日 end
 # ---------------------------------------------------------------------------
 

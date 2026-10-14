@@ -24,8 +24,9 @@ severity 约定
 口径与取舍
 ----------
 - 涨跌幅用**后复权收益** ``close × adjfactor / (prev_close × prev_adjfactor) - 1`` 判断，
-  避免除权日未复权价格的跳空造成误报。``adjfactor`` 发生变化的那天（除权或因子基准
-  跳变）需要除权参考价才能还原涨跌停带，本模块直接跳过这些行，交由复权一致性检查。
+  避免除权日未复权价格的跳空造成误报。除权日（有公司行为记录）的涨跌停带以
+  因子隐含除权参考价为基准归一化（issue #60，与涨跌停预计算同口径），照常校验；
+  无公司行为记录的 ``adjfactor`` 跳变日基准不可信，仍跳过，交由复权一致性检查。
 - 上限优先取 ``limit_up`` / ``limit_down``（已预计算时），否则按板块通用上限
   （常量直接复用 ``quant.data.limit``，保证与预计算同源）。
 - 新股上市首日无前收（``prev_close`` 为 null）自然跳过；科创板 / 创业板 / 北交所
@@ -538,13 +539,41 @@ def _check_limit_move(
     issues: list[ValidationIssue],
     win: pl.DataFrame,
     instruments: pl.DataFrame,
+    actions: pl.DataFrame,
 ) -> None:
-    """用后复权收益判断是否越过涨跌停带上限 + 容差。"""
+    """用后复权收益判断是否越过涨跌停带上限 + 容差。
+
+    带宽归一化基准 ``_base``：普通交易日为前收；除权日（有公司行为记录）为
+    因子隐含除权参考价 ``prev_close × prev_adj / adjfactor``（issue #60，
+    与 ``quant.data.limit.compute_limits`` 的基准价口径一致）。后复权收益
+    本身就是相对该基准的收益率，两侧同基准可比。
+    """
     if win.height == 0:
         return
 
     frame = win.select("instrument", "date", "close", "adjfactor", "limit_up",
                        "limit_down", "_prev_close", "_prev_adj", "_ord", "_prev_ord")
+    if actions.height:
+        frame = frame.join(
+            actions.select("instrument", "date")
+            .unique()
+            .with_columns(pl.lit(True).alias("_has_action")),
+            on=["instrument", "date"],
+            how="left",
+        ).with_columns(pl.col("_has_action").fill_null(False))
+    else:
+        frame = frame.with_columns(pl.lit(False).alias("_has_action"))
+    frame = frame.with_columns(
+        pl.when(
+            pl.col("_has_action")
+            & pl.col("_prev_adj").is_not_null()
+            & (pl.col("_prev_adj") > 0)
+            & (pl.col("adjfactor") > 0)
+        )
+        .then(pl.col("_prev_close") * pl.col("_prev_adj") / pl.col("adjfactor"))
+        .otherwise(pl.col("_prev_close"))
+        .alias("_base")
+    )
     if instruments.height:
         frame = frame.join(
             instruments.select(
@@ -569,13 +598,13 @@ def _check_limit_move(
     board = pl.coalesce(pl.col("_info_board"), pl.col("_code_board"))
 
     up_ratio = (
-        pl.when(pl.col("limit_up").is_not_null() & (pl.col("_prev_close") > 0))
-        .then((pl.col("limit_up") / pl.col("_prev_close") - 1.0).clip(lower_bound=0.0))
+        pl.when(pl.col("limit_up").is_not_null() & (pl.col("_base") > 0))
+        .then((pl.col("limit_up") / pl.col("_base") - 1.0).clip(lower_bound=0.0))
         .otherwise(None)
     )
     down_ratio = (
-        pl.when(pl.col("limit_down").is_not_null() & (pl.col("_prev_close") > 0))
-        .then((1.0 - pl.col("limit_down") / pl.col("_prev_close")).clip(lower_bound=0.0))
+        pl.when(pl.col("limit_down").is_not_null() & (pl.col("_base") > 0))
+        .then((1.0 - pl.col("limit_down") / pl.col("_base")).clip(lower_bound=0.0))
         .otherwise(None)
     )
     from_limits = pl.max_horizontal(up_ratio, down_ratio)
@@ -614,10 +643,11 @@ def _check_limit_move(
             & (pl.col("adjfactor") > 0)
             & (pl.col("close") > 0)
         )
-        # adjfactor 变化日（除权或基准跳变）需要除权参考价才能算涨跌停带，
-        # 未复权价格在这天不可比；这类行交由复权一致性检查负责。
+        # adjfactor 跳变日：有公司行为记录的除权日按 ``_base`` 归一化带宽后照常
+        # 校验（issue #60）；无记录的跳变日因子基准不可信，交由复权一致性检查。
         .filter(
-            ((pl.col("adjfactor") / pl.col("_prev_adj")) - 1.0).abs() <= ADJ_TOLERANCE
+            (((pl.col("adjfactor") / pl.col("_prev_adj")) - 1.0).abs() <= ADJ_TOLERANCE)
+            | pl.col("_has_action")
         )
         .filter(~in_grace)
     )
@@ -1028,7 +1058,7 @@ def validate(
 
     _check_prices(issues, win)
     _check_volume_amount(issues, win)
-    _check_limit_move(issues, win, instruments)
+    _check_limit_move(issues, win, instruments, actions)
     _check_adjustments(issues, win, actions)
 
     return ValidationReport(

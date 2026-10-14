@@ -2,14 +2,31 @@
 
 量化口径
 --------
-``limit_up`` / ``limit_down`` 是「当日允许成交的价格边界」，按**前一交易日收盘价**
+``limit_up`` / ``limit_down`` 是「当日允许成交的价格边界」，按**前一交易日**基准价
 计算，与当日行情无关（无前视）：::
 
-    limit_up   = round_half_up(prev_close × (1 + ratio), 0.01)
-    limit_down = round_half_up(prev_close × (1 - ratio), 0.01)
+    limit_up   = round(base × (1 + ratio), 0.01)
+    limit_down = round(base × (1 - ratio), 0.01)
 
-``prev_close`` 是同一证券按 ``date`` 排序后的 ``close.shift(1)``；证券首个交易日无
-前收，两列保持 null。
+其中 ``round`` 沪深为四舍五入、北交所为涨停往下取/跌停往上取（见「舍入口径」）。
+
+基准价 ``base`` 的选取（issue #60）：
+
+- 普通交易日：``base = prev_close``，即同证券按 ``date`` 排序后的 ``close.shift(1)``；
+  证券首个交易日无前收，两列保持 null。
+- 除权除息日（``corporate_actions`` 中存在该 ``(instrument, date)`` 记录）：交易所
+  以除权参考价为涨跌停基准，``base = round_half_up(prev_close × prev_adj / adj, 0.01)``，
+  其中 ``prev_adj`` / ``adj`` 为前一日与当日的后复权因子。除权事件（含差异化分红
+  摊薄、送转、配股）会等比例体现在后复权因子的跳变上，因子比值即交易所口径的
+  ``prev_close / ref``。
+
+为什么不用 ``(prev_close - cash_per_share) / (1 + share_per_share)`` 公式直推：
+akshare 的每股派息是公告口径，与交易所实际扣减存在系统性差异——回购股份不参与
+分红时交易所按总股本摊薄（差异化分红）、送转基数口径、重整转增给债权人等情形
+公式都覆盖不到。631 万行 CSMAR 全量对拍（2026-09-29 数据）：公式口径与交易所
+``ref_pre_close`` 的 ≤0.005 元一致率只有 86.3%（仅现金 92.5%、仅送转 31.7%），
+因子隐含口径达 99.99%（21312/21314）。因子未跳变的除权记录（交易所未调整
+参考价，如重整转增）隐含口径自动退化为前收，不产生误伤。
 
 交易所规则表（2026-09 现行）
 ----------------------------
@@ -27,12 +44,19 @@
 
 舍入口径
 --------
-交易所按「四舍五入到分」公布涨跌停价，Python 内置 ``round`` 用的是银行家舍入
+沪深交易所按「四舍五入到分」公布涨跌停价，Python 内置 ``round`` 用的是银行家舍入
 （``round(2.5) == 2``），不适用。本模块用 :mod:`decimal` 的 ``ROUND_HALF_UP``，
 且乘法全程用 :class:`decimal.Decimal`，避免二进制浮点误差。经典用例：::
 
     prev_close=5.255, ratio=10% -> limit_up=5.78
     prev_close=5.245, ratio=10% -> limit_up=5.77
+
+北交所例外：《北京证券交易所交易规则》3.3.13，涨跌停价格计算结果不足一分的，
+涨停价「往下取」、跌停价「往上取」（``ROUND_FLOOR`` / ``ROUND_CEILING``）。
+CSMAR 25.5 万行 BJ 样本实测该口径一致率 99.89%；若按四舍五入，BJ 除权日约一半
+对不上交易所公布值。用例：::
+
+    prev_close=8.52, ratio=30% -> 涨停 11.07（11.076 往下取），跌停 5.97（5.964 往上取）
 
 ST 状态的来源与局限（重要）
 ---------------------------
@@ -64,13 +88,14 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Any
 
 import akshare as ak
 import polars as pl
 
 from quant.data.schema import (
+    CORPORATE_ACTIONS,
     DAILY_BARS,
     board_of,
     check_daily_bars,
@@ -164,36 +189,71 @@ def is_st_name(name: str | None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _round_half_up(value: Decimal) -> float:
-    """四舍五入到分（交易所口径）。"""
-    return float(value.quantize(CENT, rounding=ROUND_HALF_UP))
+def _round(value: Decimal, rounding: str) -> float:
+    """按指定舍入模式取整到分。"""
+    return float(value.quantize(CENT, rounding=rounding))
 
 
 def _limit_price(
-    prev_close: float | None, ratio: float | None, direction: int
+    base: float | None,
+    ratio: float | None,
+    direction: int,
+    board: str = "",
 ) -> float | None:
-    """按前收与比例算一侧涨跌停价，全程 Decimal + ROUND_HALF_UP。"""
-    if prev_close is None or ratio is None:
+    """按基准价与比例算一侧涨跌停价，全程 Decimal 避免二进制浮点误差。
+
+    沪深四舍五入到分（``ROUND_HALF_UP``）；北交所按《交易规则》3.3.13
+    「涨停往下取、跌停往上取」（``ROUND_FLOOR`` / ``ROUND_CEILING``，
+    CSMAR 25.5 万行 BJ 样本实测一致率 99.89%）。
+    """
+    if base is None or ratio is None:
         return None
+    if board == "bj":
+        rounding = ROUND_FLOOR if direction > 0 else ROUND_CEILING
+    else:
+        rounding = ROUND_HALF_UP
     factor = Decimal(1) + Decimal(direction) * Decimal(str(ratio))
-    return _round_half_up(Decimal(str(prev_close)) * factor)
+    return _round(Decimal(str(base)) * factor, rounding)
 
 
-def _limit_up(prev_close: float | None, ratio: float | None) -> float | None:
-    return _limit_price(prev_close, ratio, 1)
+def _limit_up(
+    base: float | None, ratio: float | None, board: str = ""
+) -> float | None:
+    return _limit_price(base, ratio, 1, board)
 
 
-def _limit_down(prev_close: float | None, ratio: float | None) -> float | None:
-    return _limit_price(prev_close, ratio, -1)
+def _base_price(row: dict[str, Any]) -> float | None:
+    """除权日基准价：隐含除权参考价 = prev_close × prev_adj / adj，四舍五入到分。
+
+    非除权日（或因子数据不可用时）直接返回 ``prev_close``，行为与修复前一致；
+    因子未跳变的除权记录（交易所未调整参考价）隐含结果也等于 ``prev_close``。
+    """
+    prev_close = row["prev_close"]
+    if prev_close is None:
+        return None
+    if not row["is_ex"]:
+        return prev_close
+    prev_adj = row["prev_adj"]
+    adj = row["adjfactor"]
+    if prev_adj is None or adj is None or prev_adj <= 0 or adj <= 0:
+        return prev_close
+    ref = Decimal(str(prev_close)) * Decimal(str(prev_adj)) / Decimal(str(adj))
+    return _round(ref, ROUND_HALF_UP)
+
+
+def _limit_down(
+    base: float | None, ratio: float | None, board: str = ""
+) -> float | None:
+    return _limit_price(base, ratio, -1, board)
 
 
 def _limit_up_row(row: dict[str, Any]) -> float | None:
     """:meth:`polars.Expr.map_elements` 的 struct 入口，保持类型标注完整。"""
-    return _limit_up(row["prev_close"], row["ratio"])
+    return _limit_up(row["_base"], row["ratio"], row["_board"])
 
 
 def _limit_down_row(row: dict[str, Any]) -> float | None:
-    return _limit_down(row["prev_close"], row["ratio"])
+    return _limit_down(row["_base"], row["ratio"], row["_board"])
 
 
 # ---------------------------------------------------------------------------
@@ -370,10 +430,14 @@ def compute_limits(
     bars: pl.DataFrame,
     instruments: pl.DataFrame,
     st_intervals: pl.DataFrame,
+    corporate_actions: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """填充 ``DAILY_BARS`` 的 ``limit_up`` / ``limit_down`` 两列。
 
     - ``prev_close`` 为同证券前一交易日收盘，证券首行 null，对应两列保持 null。
+    - 除权除息日（``corporate_actions`` 有记录的 ``(instrument, date)``）基准价
+      改用因子隐含的除权参考价，口径与取整规则见模块 docstring；
+      ``corporate_actions`` 缺省时全部按普通交易日处理（issue #60 之前的行为）。
     - 板块取自 ``instruments.board``，缺失时按证券代码用 ``board_of`` 兜底。
     - ``is_st`` 由 ``(instrument, date)`` 是否落在 ``st_intervals`` 判定，区间为闭区间，
       ``end_date`` 为 null 表示至今。
@@ -383,6 +447,8 @@ def compute_limits(
     check_schema(bars, DAILY_BARS, name="bars")
     if bars.height == 0:
         return bars.cast(DAILY_BARS)
+    if corporate_actions is not None:
+        check_schema(corporate_actions, CORPORATE_ACTIONS, name="corporate_actions")
 
     out = bars.sort(["instrument", "date"])
 
@@ -403,6 +469,9 @@ def compute_limits(
         info_board, on="instrument", how="left"
     )
     board = pl.coalesce(pl.col("_info_board"), pl.col("_code_board"))
+    # 物化成列：ratio 分支与逐行舍入都要用到板块。
+    out = out.with_columns(board.alias("_board"))
+    board = pl.col("_board")
 
     # ST 标记：(instrument, date) 落在任一 ST 区间内。
     if st_intervals.height:
@@ -436,7 +505,37 @@ def compute_limits(
         pl.col("close")
         .shift(1)
         .over("instrument", order_by="date")
-        .alias("prev_close")
+        .alias("prev_close"),
+        pl.col("adjfactor")
+        .shift(1)
+        .over("instrument", order_by="date")
+        .alias("prev_adj"),
+    )
+
+    # 除权日标记：(instrument, date) 出现在公司行为表中。cash/share 列不参与
+    # 计算（原因见模块 docstring），公司行为表只提供除权日集合。
+    if corporate_actions is not None and corporate_actions.height:
+        ex_days = corporate_actions.select("instrument", "date").unique().with_columns(
+            pl.lit(True).alias("is_ex")
+        )
+        out = out.join(ex_days, on=["instrument", "date"], how="left")
+        # 可观测性：因子未跳变的除权记录会静默退化为前收基准（重整转增等
+        # 交易所本就不调参考价的情形属正常；其余是因子表缺事件的信号）。
+        no_jump = out.filter(
+            pl.col("is_ex").fill_null(False)
+            & pl.col("prev_adj").is_not_null()
+            & (pl.col("prev_adj") == pl.col("adjfactor"))
+        ).height
+        if no_jump:
+            logger.info(
+                "compute_limits: %d 行除权记录因子未跳变，基准退化为前收", no_jump
+            )
+    else:
+        out = out.with_columns(pl.lit(None, dtype=pl.Boolean).alias("is_ex"))
+    out = out.with_columns(
+        pl.struct(["prev_close", "prev_adj", "adjfactor", "is_ex"])
+        .map_elements(_base_price, return_dtype=pl.Float64)
+        .alias("_base")
     )
 
     main_ratio = (
@@ -462,10 +561,10 @@ def compute_limits(
     out = out.with_columns(ratio)
 
     out = out.with_columns(
-        pl.struct(["prev_close", "ratio"])
+        pl.struct(["_base", "ratio", "_board"])
         .map_elements(_limit_up_row, return_dtype=pl.Float64)
         .alias("limit_up"),
-        pl.struct(["prev_close", "ratio"])
+        pl.struct(["_base", "ratio", "_board"])
         .map_elements(_limit_down_row, return_dtype=pl.Float64)
         .alias("limit_down"),
     )
