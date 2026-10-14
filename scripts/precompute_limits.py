@@ -7,7 +7,8 @@
     uv run python scripts/precompute_limits.py --refresh-st
 
 读取 ``data/bars/*.parquet`` 与 ``data/instruments.parquet``，构建 / 读取 ST 区间
-（缓存到 ``data/st_intervals.parquet``），调用 :func:`quant.data.limit.compute_limits`
+（缓存到 ``data/st_intervals.parquet``），连同 ``corporate_actions.parquet``
+（除权日基准价，issue #60）调用 :func:`quant.data.limit.compute_limits`
 填充 ``limit_up`` / ``limit_down``，按自然年写回原文件（写回前过 ``check_daily_bars``）。
 
 ``--instruments`` 只限制 ST 区间构建范围，用于局部跑批；未列出的证券按非 ST 处理。
@@ -24,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import polars as pl  # noqa: E402
 
+from quant.data.cache import CORPORATE_ACTIONS_FILE, load_corporate_actions  # noqa: E402
 from quant.data.limit import (  # noqa: E402
     ST_INTERVALS,
     build_st_intervals,
@@ -146,7 +148,13 @@ def main(argv: list[str] | None = None) -> int:
     st = load_or_build_st(
         data_dir, wanted, refresh=args.refresh_st, source=AkshareSource()
     )
-    out = compute_limits(bars, instruments, st)
+    # 除权日基准价需要公司行为（issue #60）；缓存缺失时退化为旧口径并告警。
+    if (data_dir / CORPORATE_ACTIONS_FILE).exists():
+        actions = load_corporate_actions(data_dir)
+    else:
+        logger.warning("缺少 %s，除权日基准价将退化为前收盘", CORPORATE_ACTIONS_FILE)
+        actions = None
+    out = compute_limits(bars, instruments, st, actions)
     filled = out.filter(pl.col("limit_up").is_not_null()).height
     logger.info("预计算完成：%d/%d 行填出涨跌停", filled, out.height)
     write_limits_by_year(out, bars_dir)

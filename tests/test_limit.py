@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 import polars as pl
 import pytest
@@ -20,7 +20,13 @@ from quant.data.limit import (
     limit_ratio,
     st_intervals_from_name_history,
 )
-from quant.data.schema import DAILY_BARS, INSTRUMENT_INFO, board_of, check_daily_bars
+from quant.data.schema import (
+    CORPORATE_ACTIONS,
+    DAILY_BARS,
+    INSTRUMENT_INFO,
+    board_of,
+    check_daily_bars,
+)
 
 D1 = dt.date(2020, 8, 21)  # 创业板改革前（周五）
 D2 = dt.date(2020, 8, 24)  # 改革生效日（周一）
@@ -41,6 +47,11 @@ BOARD_BY_INSTRUMENT = {
 
 def _bars(records: list[tuple[str, dt.date, float]]) -> pl.DataFrame:
     """records: (instrument, date, close)，其余价格列用收盘价填充。"""
+    return _bars_adj([(instrument, day, close, 1.0) for instrument, day, close in records])
+
+
+def _bars_adj(records: list[tuple[str, dt.date, float, float]]) -> pl.DataFrame:
+    """records: (instrument, date, close, adjfactor)，其余价格列用收盘价填充。"""
     n = len(records)
     closes = [r[2] for r in records]
     return (
@@ -55,7 +66,7 @@ def _bars(records: list[tuple[str, dt.date, float]]) -> pl.DataFrame:
                 "vwap": closes,
                 "volume": [1.0] * n,
                 "amount": [1.0] * n,
-                "adjfactor": [1.0] * n,
+                "adjfactor": [r[3] for r in records],
                 "limit_up": [None] * n,
                 "limit_down": [None] * n,
             }
@@ -91,12 +102,27 @@ def _intervals(rows: list[tuple[str, dt.date, dt.date | None]]) -> pl.DataFrame:
     )
 
 
-def _expected(prev_close: float, ratio: float, direction: int) -> float:
+def _actions(rows: list[tuple[str, dt.date, float, float]]) -> pl.DataFrame:
+    """rows: (instrument, date, cash_per_share, share_per_share)。"""
+    return pl.DataFrame(
+        {
+            "instrument": [r[0] for r in rows],
+            "date": [r[1] for r in rows],
+            "cash_per_share": [r[2] for r in rows],
+            "share_per_share": [r[3] for r in rows],
+        },
+        schema=CORPORATE_ACTIONS,
+    )
+
+
+def _expected(prev_close: float, ratio: float, direction: int, board: str = "main") -> float:
     factor = Decimal(1) + Decimal(direction) * Decimal(str(ratio))
+    rounding = ROUND_HALF_UP
+    if board == "bj":
+        # 北交所：涨停向下取整、跌停向上取整（issue #60，CSMAR 实证）
+        rounding = ROUND_FLOOR if direction > 0 else ROUND_CEILING
     return float(
-        (Decimal(str(prev_close)) * factor).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
+        (Decimal(str(prev_close)) * factor).quantize(Decimal("0.01"), rounding=rounding)
     )
 
 
@@ -200,12 +226,36 @@ def test_round_half_up_classic_cases() -> None:
 
 def test_round_half_up_not_bankers_rounding() -> None:
     # 5.255 * 1.10 = 5.7805 -> HALF_UP 得 5.78；银行家舍入会得到 5.78 或 5.77 视表示而定。
-    assert limit._limit_up(5.255, 0.10) == 5.78
-    assert limit._limit_up(5.245, 0.10) == 5.77
-    assert limit._limit_down(5.255, 0.10) == 4.73
-    assert limit._limit_down(5.245, 0.10) == 4.72
-    assert limit._limit_up(None, 0.10) is None
-    assert limit._limit_up(5.0, None) is None
+    assert limit._limit_up(5.255, 0.10, "main") == 5.78
+    assert limit._limit_up(5.245, 0.10, "main") == 5.77
+    assert limit._limit_down(5.255, 0.10, "main") == 4.73
+    assert limit._limit_down(5.245, 0.10, "main") == 4.72
+    assert limit._limit_up(None, 0.10, "main") is None
+    assert limit._limit_up(5.0, None, "main") is None
+
+
+def test_bj_rounds_limit_up_floor_and_limit_down_ceil() -> None:
+    # 北交所口径（CSMAR 25.5 万行实证，issue #60）：涨停向下取整、跌停向上取整。
+    # 8.52 × 1.3 = 11.076 -> 11.07（四舍五入会给 11.08）
+    # 8.52 × 0.7 = 5.964  -> 5.97（四舍五入会给 5.96）
+    assert limit._limit_up(8.52, 0.30, "bj") == 11.07
+    assert limit._limit_down(8.52, 0.30, "bj") == 5.97
+    # 沪深保持四舍五入
+    assert limit._limit_up(8.52, 0.30, "kcb") == 11.08
+    assert limit._limit_down(8.52, 0.30, "kcb") == 5.96
+
+
+def test_compute_limits_bj_floor_ceil_end_to_end() -> None:
+    bars = _bars(
+        [
+            ("920001.BJ", D1, 8.52),
+            ("920001.BJ", D2, 8.6),
+        ]
+    )
+    info = _instruments([("920001.BJ", "北", dt.date(2022, 1, 1))])
+    out = compute_limits(bars, info, _intervals([]))
+    got = {row["date"]: (row["limit_up"], row["limit_down"]) for row in out.iter_rows(named=True)}
+    assert got[D2] == (11.07, 5.97)
 
 
 # ---------------------------------------------------------------------------
@@ -488,8 +538,9 @@ def test_compute_limits_vectorized_matches_rule_function() -> None:
             ratio = limit_ratio(
                 BOARD_BY_INSTRUMENT[row["instrument"]], row["date"], st_all
             )
-            assert row["limit_up"] == _expected(prev_close, ratio, 1)
-            assert row["limit_down"] == _expected(prev_close, ratio, -1)
+            board = BOARD_BY_INSTRUMENT[row["instrument"]]
+            assert row["limit_up"] == _expected(prev_close, ratio, 1, board)
+            assert row["limit_down"] == _expected(prev_close, ratio, -1, board)
 
 
 def test_compute_limits_empty_bars() -> None:
@@ -500,3 +551,151 @@ def test_compute_limits_empty_bars() -> None:
     )
     assert out.height == 0
     assert out.schema == DAILY_BARS
+
+
+# ---------------------------------------------------------------------------
+# 除权日基准价（issue #60）
+#
+# 除权除息日（corporate_actions 有记录的 (instrument, date)）基准价取除权参考价，
+# 由后复权因子跳变隐含：ref = prev_close × prev_adj / adj，四舍五入到分后再按
+# 板块规则算涨跌停。以下用例的 adj 按真实事件口径构造：现金分红 C 时
+# adj = prev_close / (prev_close - C)，送转 S 时 adj = 1 + S，两者叠加
+# adj = prev_close / ((prev_close - C) / (1 + S))。
+# ---------------------------------------------------------------------------
+
+#: 现金分红 0.5 元、前收 10.0 时的后复权因子（ref = 9.5）。
+_ADJ_CASH_05_ON_10: float = 10.0 / 9.5
+
+
+def test_ex_date_cash_dividend_uses_reference_price() -> None:
+    bars = _bars_adj(
+        [
+            ("600001.SH", D1, 10.0, 1.0),
+            ("600001.SH", D2, 10.2, _ADJ_CASH_05_ON_10),
+            ("600001.SH", D3, 10.5, _ADJ_CASH_05_ON_10),
+        ]
+    )
+    info = _instruments([("600001.SH", "甲", dt.date(2000, 1, 1))])
+    actions = _actions([("600001.SH", D2, 0.5, 0.0)])
+    out = compute_limits(bars, info, _intervals([]), actions)
+    got = {row["date"]: (row["limit_up"], row["limit_down"]) for row in out.iter_rows(named=True)}
+    # D2 是除息日：基准价 9.5（10.0 - 0.5），limit = 9.5 × (1 ± 10%)
+    assert got[D1] == (None, None)
+    assert got[D2] == (10.45, 8.55)
+    # D3 非除权日：基准价回到前收 10.2
+    assert got[D3] == (11.22, 9.18)
+
+
+def test_ex_date_share_dividend_uses_reference_price() -> None:
+    bars = _bars_adj(
+        [
+            ("600001.SH", D1, 20.0, 1.0),
+            ("600001.SH", D2, 13.5, 1.5),  # 10 转 5：ref = 20 / 1.5
+        ]
+    )
+    info = _instruments([("600001.SH", "甲", dt.date(2000, 1, 1))])
+    actions = _actions([("600001.SH", D2, 0.0, 0.5)])
+    out = compute_limits(bars, info, _intervals([]), actions)
+    got = {row["date"]: (row["limit_up"], row["limit_down"]) for row in out.iter_rows(named=True)}
+    # ref = 13.3333… → 取整 13.33；limit = 13.33 × (1 ± 10%)
+    assert got[D2] == (14.66, 12.00)
+
+
+def test_ex_date_cash_and_share_uses_reference_price() -> None:
+    bars = _bars_adj(
+        [
+            ("600001.SH", D1, 10.0, 1.0),
+            ("600001.SH", D2, 6.5, 10.0 / (9.5 / 1.5)),  # 派 0.5 + 10 转 5
+        ]
+    )
+    info = _instruments([("600001.SH", "甲", dt.date(2000, 1, 1))])
+    actions = _actions([("600001.SH", D2, 0.5, 0.5)])
+    out = compute_limits(bars, info, _intervals([]), actions)
+    got = {row["date"]: (row["limit_up"], row["limit_down"]) for row in out.iter_rows(named=True)}
+    # ref = (10 - 0.5) / 1.5 = 6.3333… → 取整 6.33；limit = 6.33 × (1 ± 10%)
+    assert got[D2] == (6.96, 5.70)
+
+
+def test_ex_date_reference_price_rounds_half_up_to_cent() -> None:
+    # 构造隐含 ref 恰好落在半分边界：ref = 5.245（adj = 5.3 / 5.245）。
+    bars = _bars_adj(
+        [
+            ("600001.SH", D1, 5.3, 1.0),
+            ("600001.SH", D2, 5.5, 5.3 / 5.245),
+        ]
+    )
+    info = _instruments([("600001.SH", "甲", dt.date(2000, 1, 1))])
+    actions = _actions([("600001.SH", D2, 0.055, 0.0)])
+    out = compute_limits(bars, info, _intervals([]), actions)
+    got = {row["date"]: row["limit_up"] for row in out.iter_rows(named=True)}
+    # ref 半升取整为 5.25（银行家舍入会给 5.24），limit_up = 5.25 × 1.1 = 5.78
+    assert got[D2] == 5.78
+
+
+def test_adj_jump_without_corporate_action_keeps_prev_close() -> None:
+    # 因子跳变但无公司行为记录：不触发除权基准，沿用前收（退化保护）。
+    bars = _bars_adj(
+        [
+            ("600001.SH", D1, 10.0, 1.0),
+            ("600001.SH", D2, 10.0, 2.0),
+        ]
+    )
+    info = _instruments([("600001.SH", "甲", dt.date(2000, 1, 1))])
+    out = compute_limits(bars, info, _intervals([]), _actions([]))
+    got = {row["date"]: (row["limit_up"], row["limit_down"]) for row in out.iter_rows(named=True)}
+    assert got[D2] == (11.00, 9.00)
+
+
+def test_corporate_action_with_flat_factor_keeps_prev_close() -> None:
+    # 有公司行为记录但因子未动（如重整转增给债权人，交易所不调整参考价）：
+    # 隐含 ref = 前收，行为与修复前一致。
+    bars = _bars_adj(
+        [
+            ("600001.SH", D1, 10.0, 1.0),
+            ("600001.SH", D2, 10.1, 1.0),
+        ]
+    )
+    info = _instruments([("600001.SH", "甲", dt.date(2000, 1, 1))])
+    actions = _actions([("600001.SH", D2, 0.5, 0.1)])
+    out = compute_limits(bars, info, _intervals([]), actions)
+    got = {row["date"]: (row["limit_up"], row["limit_down"]) for row in out.iter_rows(named=True)}
+    assert got[D2] == (11.00, 9.00)
+
+
+def test_ex_date_on_first_bar_stays_null() -> None:
+    bars = _bars_adj([("600001.SH", D1, 10.0, 1.0)])
+    info = _instruments([("600001.SH", "甲", dt.date(2000, 1, 1))])
+    actions = _actions([("600001.SH", D1, 0.5, 0.0)])
+    out = compute_limits(bars, info, _intervals([]), actions)
+    assert out["limit_up"].to_list() == [None]
+    assert out["limit_down"].to_list() == [None]
+
+
+def test_compute_limits_without_actions_unchanged() -> None:
+    # 缺省 corporate_actions=None：与三参数旧调用行为一致。
+    bars = _bars_adj(
+        [
+            ("600001.SH", D1, 10.0, 1.0),
+            ("600001.SH", D2, 10.2, _ADJ_CASH_05_ON_10),
+        ]
+    )
+    info = _instruments([("600001.SH", "甲", dt.date(2000, 1, 1))])
+    out = compute_limits(bars, info, _intervals([]))
+    got = {row["date"]: (row["limit_up"], row["limit_down"]) for row in out.iter_rows(named=True)}
+    assert got[D2] == (11.00, 9.00)
+
+
+def test_ex_date_reference_price_applies_board_ratio() -> None:
+    # 除权日与板块 / ST 规则叠加：创业板改革后 20%。
+    bars = _bars_adj(
+        [
+            ("300001.SZ", D1, 10.0, 1.0),
+            ("300001.SZ", D2, 9.6, _ADJ_CASH_05_ON_10),
+        ]
+    )
+    info = _instruments([("300001.SZ", "乙", dt.date(2010, 1, 1))])
+    actions = _actions([("300001.SZ", D2, 0.5, 0.0)])
+    out = compute_limits(bars, info, _intervals([]), actions)
+    got = {row["date"]: (row["limit_up"], row["limit_down"]) for row in out.iter_rows(named=True)}
+    # ref 9.5 × (1 ± 20%)
+    assert got[D2] == (11.40, 7.60)

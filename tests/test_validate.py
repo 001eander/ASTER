@@ -250,6 +250,82 @@ def test_limit_move_exceeded(tmp_path: Path) -> None:
     assert _severity(report, "limit_move_exceeded") == "error"
 
 
+def test_limit_move_ex_date_beyond_band_is_error(tmp_path: Path) -> None:
+    """除权日也纳入涨跌幅校验（issue #60）：后复权收益 13.4% 越过主板 10% 带。"""
+    bars = _apply(_base_bars(), _MAIN, lambda day: day > DAYS[4], adjfactor=1.05)
+    bars = _apply(
+        bars,
+        _MAIN,
+        lambda day: day == DAYS[4],
+        close=10.8,
+        open=10.8,
+        high=10.8,
+        low=10.7,
+        vwap=10.75,
+        adjfactor=1.05,
+    )
+    actions = [
+        {
+            "date": DAYS[4],
+            "instrument": _MAIN,
+            "cash_per_share": 0.5,
+            "share_per_share": 0.0,
+        }
+    ]
+    report = validate(_write_cache(tmp_path, bars, actions=actions))
+    assert not report.ok
+    assert _severity(report, "limit_move_exceeded") == "error"
+
+
+def test_limit_move_ex_date_within_band_not_flagged(tmp_path: Path) -> None:
+    """除权日按除权参考价归一化带宽：因子隐含基准 9.5238，limit 10.47 对应
+    带宽 9.94%，后复权收益 8.15% 不应误报（带宽若以未复权前收归一会错报）。"""
+    bars = _apply(_base_bars(), _MAIN, lambda day: day > DAYS[4], adjfactor=1.05)
+    bars = _apply(
+        bars,
+        _MAIN,
+        lambda day: day == DAYS[4],
+        close=10.3,
+        open=10.3,
+        high=10.4,
+        low=10.2,
+        vwap=10.3,
+        limit_up=10.47,
+        limit_down=8.57,
+        adjfactor=1.05,
+    )
+    actions = [
+        {
+            "date": DAYS[4],
+            "instrument": _MAIN,
+            "cash_per_share": 0.5,
+            "share_per_share": 0.0,
+        }
+    ]
+    report = validate(_write_cache(tmp_path, bars, actions=actions))
+    assert "limit_move_exceeded" not in _checks(report)
+
+
+def test_limit_move_unexplained_adj_jump_still_skipped(tmp_path: Path) -> None:
+    """因子跳变但无公司行为记录：基准不可信，仍跳过涨跌幅校验（13.4% 不报）。"""
+    bars = _apply(_base_bars(), _MAIN, lambda day: day > DAYS[4], adjfactor=1.08)
+    bars = _apply(
+        bars,
+        _MAIN,
+        lambda day: day == DAYS[4],
+        close=10.5,
+        open=10.5,
+        high=10.5,
+        low=10.4,
+        vwap=10.45,
+        adjfactor=1.08,
+    )
+    report = validate(_write_cache(tmp_path, bars))
+    assert report.ok
+    assert "limit_move_exceeded" not in _checks(report)
+    assert _severity(report, "adjfactor_jump") == "warning"
+
+
 def test_limit_move_within_band_not_flagged(tmp_path: Path) -> None:
     bars = _apply(
         _base_bars(),
