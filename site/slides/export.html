@@ -1,0 +1,1734 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="no-js">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>【拉普拉斯奖学金】陶唐-上海财经大学-本科-数据科学与大数据技术-2024级</title>
+  <meta name="description" content="拉普拉斯奖学金答辩幻灯片：ASTER 星菀，面向 A 股的日频量化系统，Agent 挖因子、AutoML 合成信号、凸优化组合。">
+  <meta name="theme-color" content="#17131f">
+  <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJBU1RFUiI+DQogIDxyZWN0IHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgZmlsbD0iIzE3MTMxZiIvPg0KICA8cGF0aCBkPSJNMTYgNGMxLjQgOSA1IDEyLjYgMTQgMTQtOSAxLjQtMTIuNiA1LTE0IDE0LTEuNC05LTUtMTIuNi0xNC0xNCA5LTEuNCAxMi42LTUgMTQtMTRaIiBmaWxsPSIjYjlhN2UwIi8+DQo8L3N2Zz4NCg==" type="image/svg+xml">
+  <style>
+/**
+ * ASTER 展示站设计 token：纸白底、墨黑正文、单一星菀紫强调色、深色页首。
+ * 只在 :root 定义一次，页面样式一律引用变量。
+ */
+:root {
+  color-scheme: light;
+
+  /* 色板 */
+  --color-paper: #f6f3ec;
+  --color-paper-raised: #fcfaf5;
+  --color-ink: #191512;
+  --color-ink-muted: #4d463d;
+  --color-rule: #d6cebe;
+  --color-accent: #7a5bb5;
+  --color-accent-soft: #b9a7e0;
+  --color-hero-bg: #17131f;
+  --color-hero-ink: #f1ecf7;
+  --color-hero-muted: #b8aecb;
+
+  /* 字体栈：中文标题衬线，正文系统无衬线，数字等宽 */
+  --font-serif: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", Georgia, serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+
+  /* 字号阶梯 */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: clamp(1.6rem, 1.2rem + 1.6vw, 2.4rem);
+  --text-display: clamp(3.2rem, 1.8rem + 6vw, 6.5rem);
+
+  /* 间距 */
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2.5rem;
+  --space-xl: 4rem;
+  --space-2xl: clamp(4.5rem, 10vw, 8rem);
+
+  /* 版心与细线 */
+  --shell: 72rem;
+  --gutter: clamp(1.25rem, 4vw, 4.5rem);
+  --rule: 1px solid var(--color-rule);
+
+  /* 断点：媒体查询里必须写字面量，变量只作来源记录 */
+  --breakpoint-wide: 1440px;
+  --breakpoint-laptop: 1024px;
+  --breakpoint-tablet: 768px;
+  --breakpoint-phone: 390px;
+
+  /* 动效 */
+  --duration: 160ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+
+  </style>
+  <style>
+/* ASTER 答辩 deck：固定 1280x720 设计坐标，外层按 16:9 缩放。颜色与字体沿用共享 token 文件。 */
+
+:root {
+  /* 设计坐标与缩放 */
+  --slide-w: 1280px;
+  --slide-h: 720px;
+  --slide-scale: 1;
+
+  /* 版式 */
+  --slide-pad: 64px;
+  --slide-gap: 28px;
+  --slide-title: 54px;
+  --slide-lede: 22px;
+  --slide-body: 19px;
+  --slide-small: 14px;
+  --slide-rule: 1px solid var(--color-rule);
+
+  /* 舞台与外框 */
+  --deck-chrome-h: 120px;
+  --deck-w: min(94vw, calc((100vh - var(--deck-chrome-h)) * 16 / 9));
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 24px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: var(--slide-body);
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd,
+ul {
+  margin: 0;
+}
+
+ul {
+  padding-left: 1.1em;
+}
+
+a {
+  color: inherit;
+  text-decoration-color: var(--color-accent);
+  text-underline-offset: 0.2em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.skip {
+  position: absolute;
+  top: var(--space-2xs);
+  left: -100vw;
+  z-index: 10;
+  padding: var(--space-2xs) var(--space-sm);
+  border: var(--rule);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+  font-size: var(--slide-small);
+}
+
+.skip:focus,
+.skip:focus-visible {
+  left: var(--space-2xs);
+}
+
+/* 舞台：宽高比 16:9，幻灯片内部按 1280 宽缩放 */
+
+.deck {
+  position: relative;
+  width: var(--deck-w);
+  aspect-ratio: 16 / 9;
+  margin: 0;
+  background: var(--color-paper-raised);
+  box-shadow: 0 1px 0 var(--color-rule), 0 28px 60px rgba(25, 21, 18, 0.14);
+}
+
+.deck:focus {
+  outline: none;
+}
+
+.slide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--slide-w);
+  height: var(--slide-h);
+  padding: var(--slide-pad);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-paper-raised);
+  overflow: hidden;
+  transform: scale(var(--slide-scale));
+  transform-origin: top left;
+}
+
+.slide__header {
+  flex: 0 0 auto;
+}
+
+.slide__kicker {
+  font-family: var(--font-mono);
+  font-size: var(--slide-small);
+  letter-spacing: 0.16em;
+  color: var(--color-accent);
+}
+
+.slide__title {
+  margin-top: 0.35em;
+  font-family: var(--font-serif);
+  font-size: var(--slide-title);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+}
+
+.slide__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: var(--slide-gap);
+  display: flex;
+  flex-direction: column;
+  gap: var(--slide-gap);
+}
+
+.slide__footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding-top: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-top: var(--slide-rule);
+  font-size: var(--slide-small);
+  color: var(--color-ink-muted);
+}
+
+.slide__folio {
+  letter-spacing: 0.1em;
+  color: var(--color-accent);
+}
+
+.slide__meta {
+  letter-spacing: 0.08em;
+}
+
+.slide__pending {
+  align-self: flex-start;
+  padding: 20px 26px;
+  border: 1px dashed var(--color-rule);
+  color: var(--color-ink-muted);
+  font-size: var(--slide-lede);
+}
+
+/* 封面 */
+
+.slide--cover {
+  background: var(--color-hero-bg);
+  color: var(--color-hero-ink);
+}
+
+.slide--cover .slide__kicker {
+  color: var(--color-accent-soft);
+}
+
+.cover {
+  gap: 22px;
+}
+
+.cover__eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--slide-small);
+  letter-spacing: 0.18em;
+  color: var(--color-hero-muted);
+}
+
+.cover__title {
+  margin-top: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 24px;
+  font-size: 104px;
+  letter-spacing: 0.04em;
+}
+
+.cover__alias {
+  font-size: 32px;
+  letter-spacing: 0.36em;
+  color: var(--color-hero-muted);
+}
+
+.cover__lede {
+  max-width: 60ch;
+  font-size: var(--slide-lede);
+  line-height: 1.7;
+  color: var(--color-hero-muted);
+}
+
+.identity {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px 28px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(241, 236, 247, 0.18);
+}
+
+.identity dt {
+  font-size: var(--slide-small);
+  letter-spacing: 0.12em;
+  color: var(--color-hero-muted);
+}
+
+.identity dd {
+  margin: 4px 0 0;
+  font-size: var(--slide-lede);
+  color: var(--color-hero-ink);
+}
+
+.slide--cover .slide__footer {
+  border-top-color: rgba(241, 236, 247, 0.18);
+  color: var(--color-hero-muted);
+}
+
+.slide--cover .slide__folio {
+  color: var(--color-accent-soft);
+}
+
+/* 内容块 */
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 40px;
+}
+
+.grid--2x2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 26px 40px;
+}
+
+.block {
+  padding-top: 14px;
+  border-top: 2px solid var(--color-rule);
+}
+
+.block__title {
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.block__text {
+  margin-top: 10px;
+  color: var(--color-ink-muted);
+  font-size: var(--slide-body);
+}
+
+.stat {
+  margin-top: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.stat__value {
+  font-size: 40px;
+  line-height: 1.1;
+  color: var(--color-accent);
+}
+
+.stat__label {
+  font-size: var(--slide-body);
+  color: var(--color-ink-muted);
+}
+
+.list {
+  margin-top: 10px;
+  color: var(--color-ink-muted);
+  font-size: var(--slide-body);
+  line-height: 1.85;
+}
+
+.list--inline {
+  line-height: 1.7;
+}
+
+.callout {
+  margin-top: auto;
+  padding: 20px 26px;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-paper);
+}
+
+.callout .block__text {
+  margin-top: 6px;
+}
+
+/* 项目部分（#159）：总览、架构、Agent 闭环、因子库 */
+
+.lede {
+  max-width: 88ch;
+  font-size: 20px;
+  line-height: 1.7;
+  color: var(--color-ink-muted);
+}
+
+.slide__body--tight {
+  gap: 22px;
+}
+
+.slide__body--split {
+  display: grid;
+  grid-template-columns: minmax(0, 520px) minmax(0, 1fr);
+  gap: 36px;
+  align-items: start;
+}
+
+.grid--3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px 32px;
+}
+
+.grid--3 .block__title {
+  font-size: 22px;
+}
+
+.grid--3 .block__text,
+.grid--3 .list {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.grid--4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.grid--4 .block__title {
+  font-size: 20px;
+}
+
+.grid--4 .block__text {
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.block__index {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  color: var(--color-accent);
+}
+
+.block--tight {
+  padding-top: 10px;
+}
+
+.block--tight .block__title {
+  font-size: 21px;
+  margin-top: 2px;
+}
+
+.block--tight .block__text {
+  margin-top: 6px;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.defense .block__title {
+  font-size: 20px;
+}
+
+.defense .block__text {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.list--tight {
+  padding-left: 1.05em;
+  line-height: 1.6;
+}
+
+.list--tight li + li {
+  margin-top: 4px;
+}
+
+.strip {
+  margin-top: auto;
+  padding: 12px 20px;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-paper);
+  font-size: 18px;
+  color: var(--color-ink);
+}
+
+.figure {
+  margin: 0;
+  min-width: 0;
+}
+
+.figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: var(--rule);
+  background: var(--color-paper-raised);
+}
+
+.figure figcaption {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-ink-muted);
+}
+
+.terms {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0;
+}
+
+.terms li {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 14px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: var(--slide-rule);
+}
+
+.terms li:first-child {
+  border-top: 2px solid var(--color-rule);
+}
+
+.term {
+  font-family: var(--font-serif);
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.term__text {
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--color-ink-muted);
+}
+
+.facts {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 2px solid var(--color-accent);
+}
+
+.facts dt {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--color-accent);
+}
+
+.facts dd {
+  margin: 3px 0 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--color-ink);
+}
+
+.lineage {
+  margin: 0;
+  padding-top: 10px;
+  border-top: var(--slide-rule);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-ink-muted);
+}
+
+.lineage code {
+  font-size: 14px;
+  color: var(--color-accent);
+}
+
+/* 项目部分（#160）：模型层、优化器、边界、规划 */
+
+.block__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.status {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.status--live {
+  color: var(--color-accent);
+}
+
+.status--planned {
+  border-style: dashed;
+  color: var(--color-ink-muted);
+}
+
+.block--status .block__text,
+.block--status .list {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.chain {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chain li {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 14px;
+  padding: 6px 0;
+  border-top: var(--slide-rule);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.chain li:first-child {
+  border-top: 2px solid var(--color-rule);
+}
+
+.chain__label {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.chain__note {
+  color: var(--color-ink-muted);
+}
+
+.note {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-ink-muted);
+}
+
+.optim {
+  gap: 20px 40px;
+}
+
+.optim .block__text {
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.flow {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-top: 2px solid var(--color-accent);
+  border-bottom: var(--slide-rule);
+  background: var(--color-paper);
+}
+
+.flow li {
+  display: grid;
+  gap: 2px;
+  padding: 10px 16px 12px 0;
+}
+
+.flow li + li {
+  padding-left: 18px;
+  border-left: var(--slide-rule);
+}
+
+.flow__index {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--color-accent);
+}
+
+.flow__label {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.flow__note {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--color-ink-muted);
+}
+
+.limits {
+  padding-top: 14px;
+  border-top: 2px solid var(--color-rule);
+}
+
+.limits .block__title {
+  margin-bottom: 8px;
+}
+
+.limits__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 40px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--color-ink-muted);
+}
+
+.limits__list li {
+  position: relative;
+  padding-left: 1.2em;
+}
+
+.limits__list li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  color: var(--color-accent);
+}
+
+.plan {
+  gap: 40px;
+}
+
+.plan .block__title {
+  font-size: 24px;
+}
+
+.plan .list {
+  font-size: 17px;
+  line-height: 1.8;
+}
+
+/* 翻页控件 */
+
+.deck-chrome {
+  width: var(--deck-w);
+  display: grid;
+  gap: 10px;
+}
+
+.deck-progress {
+  height: 3px;
+  background: var(--color-rule);
+  overflow: hidden;
+}
+
+.deck-progress__bar {
+  display: block;
+  width: calc(100% / 11);
+  height: 100%;
+  background: var(--color-accent);
+  transition: width var(--duration) var(--ease);
+}
+
+.deck-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
+.deck-bar__button {
+  min-height: 44px;
+  padding: 8px 18px;
+  border: var(--rule);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--slide-small);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: border-color var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+.deck-bar__button:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.deck-bar__button[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.deck-bar__status {
+  min-width: 4.5em;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--slide-small);
+  letter-spacing: 0.1em;
+}
+
+.deck-bar__download {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 18px;
+  border: var(--rule);
+  background: transparent;
+  color: var(--color-ink-muted);
+  font-size: var(--slide-small);
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  transition: border-color var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+.deck-bar__download:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.rotate-hint {
+  display: none;
+  text-align: center;
+  font-size: var(--slide-small);
+  color: var(--color-ink-muted);
+}
+
+/* 有 JS 时只显示当前页；无 JS 时所有页纵向排列 */
+
+html.js .slide:not(.is-current) {
+  display: none;
+}
+
+html.no-js body {
+  display: block;
+  padding: 24px;
+}
+
+html.no-js .deck {
+  width: auto;
+  max-width: none;
+  aspect-ratio: auto;
+  background: transparent;
+  box-shadow: none;
+}
+
+html.no-js .slide {
+  position: static;
+  width: 100%;
+  max-width: 1280px;
+  height: auto;
+  min-height: 0;
+  margin: 0 auto 24px;
+  transform: none;
+  overflow: visible;
+  border: var(--rule);
+}
+
+html.no-js .slide__title {
+  font-size: clamp(2rem, 5vw, 3.4rem);
+}
+
+html.no-js .cover__title {
+  font-size: clamp(2.5rem, 9vw, 6.5rem);
+}
+
+html.no-js .deck-chrome {
+  display: none;
+}
+
+@media (min-width: 1440px) {
+  :root {
+    --deck-w: min(1200px, calc((100vh - var(--deck-chrome-h)) * 16 / 9));
+  }
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --deck-w: min(96vw, calc((100vh - var(--deck-chrome-h)) * 16 / 9));
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --slide-pad: 48px;
+  }
+
+  .rotate-hint {
+    display: block;
+  }
+}
+
+@media (max-width: 390px) {
+  :root {
+    --deck-w: 94vw;
+  }
+
+  body {
+    padding-inline: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 打印：横向页面，每页一张，隐藏翻页控件 */
+
+@media print {
+  @page {
+    size: 1280px 720px;
+    margin: 0;
+  }
+
+  html,
+  body {
+    background: #fff;
+    padding: 0;
+  }
+
+  .skip,
+  .deck-chrome,
+  .deck-bar,
+  .deck-progress,
+  .rotate-hint {
+    display: none !important;
+  }
+
+  .deck,
+  html.js .deck,
+  html.no-js .deck {
+    width: auto;
+    max-width: none;
+    aspect-ratio: auto;
+    margin: 0;
+    box-shadow: none;
+    background: #fff;
+  }
+
+  .slide,
+  html.js .slide,
+  html.no-js .slide {
+    display: flex !important;
+    position: relative;
+    top: auto;
+    left: auto;
+    width: 1280px;
+    height: 720px;
+    margin: 0;
+    transform: none;
+    overflow: hidden;
+    border: 0;
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .slide:last-of-type {
+    break-after: auto;
+    page-break-after: auto;
+  }
+}
+
+  </style>
+  <script>
+    document.documentElement.classList.remove("no-js");
+    document.documentElement.classList.add("js");
+
+    // 模块脚本加载失败（例如 file:// 下的 CORS 限制）时退回无 JS 的纵向排列。
+    window.addEventListener("error", function (event) {
+      var target = event.target;
+      if (target instanceof HTMLScriptElement && target.type === "module") {
+        document.documentElement.classList.remove("js");
+        document.documentElement.classList.add("no-js");
+      }
+    }, true);
+  </script>
+</head>
+<body>
+  <a class="skip" href="#deck">跳到幻灯片</a>
+
+  <main class="deck" id="deck" tabindex="-1" aria-label="ASTER 答辩幻灯片">
+    <section class="slide slide--cover is-current" id="slide-1" data-slide="1" data-part="1" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-1-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 1 部分 / 封面</p>
+      </header>
+      <div class="slide__body cover">
+        <p class="cover__eyebrow">拉普拉斯奖学金申请答辩 / 2026</p>
+        <h1 class="slide__title cover__title" id="slide-1-title">ASTER<span class="cover__alias">星菀</span></h1>
+        <p class="cover__lede">面向 A 股的日频量化系统：Agent 挖因子、AutoML 合成信号、凸优化组合，每日收盘后产出可执行的 T+1 调仓单。</p>
+
+        <dl class="identity">
+          <div>
+            <dt>姓名</dt>
+            <dd>陶唐</dd>
+          </div>
+          <div>
+            <dt>学校</dt>
+            <dd>上海财经大学</dd>
+          </div>
+          <div>
+            <dt>学院</dt>
+            <dd>信息管理与工程学院</dd>
+          </div>
+          <div>
+            <dt>专业</dt>
+            <dd>数据科学与大数据技术</dd>
+          </div>
+          <div>
+            <dt>年级</dt>
+            <dd>2024 级</dd>
+          </div>
+          <div>
+            <dt>学号</dt>
+            <dd class="mono">2024111155</dd>
+          </div>
+          <div>
+            <dt>申请日期</dt>
+            <dd class="mono">2026-10-17</dd>
+          </div>
+        </dl>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">01 / 11</span>
+        <span class="slide__meta">第 1 部分 / 封面</span>
+      </footer>
+    </section>
+
+    <section class="slide" id="slide-2" data-slide="2" data-part="2" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-2-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 2 部分 / 个人简介</p>
+        <h2 class="slide__title" id="slide-2-title">个人简介</h2>
+      </header>
+      <div class="slide__body">
+        <div class="columns">
+          <section class="block" aria-labelledby="slide-2-academics">
+            <h3 class="block__title" id="slide-2-academics">学业基础</h3>
+            <p class="stat">
+              <span class="stat__value mono">GPA 3.81/4.0</span>
+              <span class="stat__label">专业排名前 5%</span>
+            </p>
+            <p class="block__text">数学与统计课程构成底子：数学分析、线性代数、概率论与数理统计、随机过程、时间序列分析。成绩稳定在专业前列，国家奖学金 2025。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-2-courses">
+            <h3 class="block__title" id="slide-2-courses">主修课程</h3>
+            <ul class="list">
+              <li>机器学习与数据挖掘</li>
+              <li>数据结构与算法</li>
+              <li>数据库原理与 SQL</li>
+              <li>最优化方法与金融计量</li>
+              <li>Python 程序设计与数值计算</li>
+            </ul>
+          </section>
+        </div>
+
+        <section class="callout" aria-labelledby="slide-2-principle">
+          <h3 class="block__title" id="slide-2-principle">治学理念</h3>
+          <p class="block__text">先把评测建起来，再谈改进。假设要写成代码，结论要能被别人重跑；一份结果只有在自己能复现时才算数。</p>
+        </section>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">02 / 11</span>
+        <span class="slide__meta">第 2 部分 / 个人简介</span>
+      </footer>
+    </section>
+
+    <section class="slide" id="slide-3" data-slide="3" data-part="3" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-3-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 3 部分 / AI 学习与技术积累</p>
+        <h2 class="slide__title" id="slide-3-title">AI 学习与技术积累</h2>
+      </header>
+      <div class="slide__body">
+        <div class="grid grid--2x2">
+          <section class="block" aria-labelledby="slide-3-courses">
+            <h3 class="block__title" id="slide-3-courses">课程</h3>
+            <p class="block__text">机器学习、深度学习、强化学习导论、最优化方法、金融计量。课程之外按项目需要补读论文与官方文档，边做边校准理解。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-3-stack">
+            <h3 class="block__title" id="slide-3-stack">技术栈</h3>
+            <ul class="list list--inline">
+              <li>Python：polars、cvxpy、AutoGluon</li>
+              <li>TypeScript / Node 编排与调度</li>
+              <li>Docker 断网沙盒</li>
+              <li>Parquet / SQL 数据层</li>
+              <li>Git 与可复现实验记录</li>
+            </ul>
+          </section>
+
+          <section class="block" aria-labelledby="slide-3-internship">
+            <h3 class="block__title" id="slide-3-internship">实习中的 AI 实践</h3>
+            <p class="block__text">三段量化实习分别落在因子研究、策略回测与组合执行。用大模型写研究脚本、做因子初筛，再由回测与门控决定去留；AI 负责加速，评测负责裁决。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-3-view">
+            <h3 class="block__title" id="slide-3-view">认知</h3>
+            <p class="block__text">大模型擅长提出假设与写代码，判断必须交给可复现的评测。AI 的价值在于把研究变成能持续运行的循环，单次答案不构成能力。</p>
+          </section>
+        </div>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">03 / 11</span>
+        <span class="slide__meta">第 3 部分 / AI 学习与技术积累</span>
+      </footer>
+    </section>
+
+    <!-- #159：第 4 页 项目总览 -->
+    <section class="slide" id="slide-4" data-slide="4" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-4-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 4 部分 / 项目</p>
+        <h2 class="slide__title" id="slide-4-title">项目总览</h2>
+      </header>
+      <div class="slide__body">
+        <p class="lede">A 股 alpha 衰减快，靠单因子与手工调参撑不住；研究脚本散落，回测与跟单口径不一，结论难以复现。ASTER 把这条研究链做成可以持续运行的流水线。</p>
+
+        <div class="grid grid--3">
+          <section class="block" aria-labelledby="slide-4-problem">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-4-problem">问题</h3>
+            <p class="block__text">假设靠人想，试错靠手跑；样本外与实盘口径不一致；因子、信号与组合散在三处，改一个环节牵动全局。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-4-goal">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-4-goal">目标</h3>
+            <p class="block__text">Agent 提假设、沙盒评分、门控入库；每天收盘后跑完整链，产出可执行的 T+1 调仓单。结论可复现，过程可审计。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-4-layers">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-4-layers">三层架构</h3>
+            <ul class="list list--tight">
+              <li><strong>数据层</strong>：增量、校验、缓存与预计算。</li>
+              <li><strong>研究层</strong>：离线跑 Agent 内循环，只写因子库。</li>
+              <li><strong>生产层</strong>：每日跑批，读因子库，落调仓单。</li>
+            </ul>
+          </section>
+        </div>
+
+        <p class="strip">研究层与生产层解耦，因子库是唯一接口；交接物只有因子工件与信号工件。</p>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">04 / 11</span>
+        <span class="slide__meta">第 4 部分 / 项目</span>
+      </footer>
+    </section>
+
+    <!-- #159：第 5 页 系统架构 -->
+    <section class="slide" id="slide-5" data-slide="5" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-5-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 4 部分 / 项目</p>
+        <h2 class="slide__title" id="slide-5-title">系统架构</h2>
+      </header>
+      <div class="slide__body slide__body--tight">
+        <figure class="figure">
+          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMTIwIDIxNiIgd2lkdGg9IjExMjAiIGhlaWdodD0iMjE2IiByb2xlPSJpbWciPg0KICA8dGl0bGU+QVNURVIg5LiJ5bGC5p625p6E5LiO5Zug5a2Q5bqT5o6l5Y+jPC90aXRsZT4NCiAgPGRlc2M+5pWw5o2u5bGC6LSf6LSj5Y+W5pWw5LiO57yT5a2Y77yM5ZCR5LiL5L6b5pWw77yb56CU56m25bGC5Zyo56a757q/5rKZ55uS6YeM5oyW5Zug5a2Q77yM5Y+q5oqK6L+H6Zeo5o6n55qE5Zug5a2Q5bel5Lu25YaZ5YWl5Zug5a2Q5bqT77yb55Sf5Lqn5bGC5q+P5pel6LeR5om577yM5Y+q6K+75Zug5a2Q5bqT5LitIHN0YXR1cyDkuLogcG9vbCDnmoTmnaHnm67vvIzokL3miJAgVCsxIOiwg+S7k+WNleOAgjwvZGVzYz4NCiAgPGRlZnM+DQogICAgPG1hcmtlciBpZD0iYXJjaC1hcnJvdyIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI5IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNyIgbWFya2VySGVpZ2h0PSI3IiBvcmllbnQ9ImF1dG8tc3RhcnQtcmV2ZXJzZSI+DQogICAgICA8cGF0aCBkPSJNMCAwIEwxMCA1IEwwIDEwIFoiIGZpbGw9IiM3YTViYjUiLz4NCiAgICA8L21hcmtlcj4NCiAgPC9kZWZzPg0KDQogIDxyZWN0IHg9IjAiIHk9IjAiIHdpZHRoPSIxMTIwIiBoZWlnaHQ9IjIxNiIgZmlsbD0iI2ZjZmFmNSIvPg0KDQogIDwhLS0g5pWw5o2u5bGCIC0tPg0KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNzMwIiBoZWlnaHQ9IjU0IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4NCiAgPHRleHQgeD0iMTgiIHk9IjI1IiBmb250LWZhbWlseT0iQ2FzY2FkaWEgTW9ubywgQ29uc29sYXMsIG1vbm9zcGFjZSIgZm9udC1zaXplPSIxNCIgbGV0dGVyLXNwYWNpbmc9IjIiIGZpbGw9IiM3YTViYjUiPjAxPC90ZXh0Pg0KICA8dGV4dCB4PSI1MiIgeT0iMjYiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyMSIgZmlsbD0iIzE5MTUxMiI+5pWw5o2u5bGCPC90ZXh0Pg0KICA8dGV4dCB4PSI1MiIgeT0iNDYiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+YWtzaGFyZSDCtyBDU01BUiDlm57loasgwrcg5qCh6aqM5LiO54mI5pys6ZSBIMK3IFBhcnF1ZXQg57yT5a2YIMK3IOmihOiuoeeul+a2qOi3jOWBnOS4juWkjeadgzwvdGV4dD4NCg0KICA8IS0tIOeglOeptuWxgiAtLT4NCiAgPHJlY3QgeD0iMCIgeT0iNzIiIHdpZHRoPSI3MzAiIGhlaWdodD0iNTQiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPg0KICA8dGV4dCB4PSIxOCIgeT0iOTciIGZvbnQtZmFtaWx5PSJDYXNjYWRpYSBNb25vLCBDb25zb2xhcywgbW9ub3NwYWNlIiBmb250LXNpemU9IjE0IiBsZXR0ZXItc3BhY2luZz0iMiIgZmlsbD0iIzdhNWJiNSI+MDI8L3RleHQ+DQogIDx0ZXh0IHg9IjUyIiB5PSI5OCIgZm9udC1mYW1pbHk9IlNvbmd0aSBTQywgU1RTb25nLCBTaW1TdW4sIEdlb3JnaWEsIHNlcmlmIiBmb250LXNpemU9IjIxIiBmaWxsPSIjMTkxNTEyIj7noJTnqbblsYI8L3RleHQ+DQogIDx0ZXh0IHg9IjUyIiB5PSIxMTgiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+56a757q/IEFnZW50IOWGheW+queOryDCtyDmlq3nvZHmspnnm5Lor4TliIYgwrcg5Y+q5YaZ5YWl6L+H6Zeo5o6n55qE5Zug5a2Q5bel5Lu2PC90ZXh0Pg0KDQogIDwhLS0g55Sf5Lqn5bGCIC0tPg0KICA8cmVjdCB4PSIwIiB5PSIxNDQiIHdpZHRoPSI3MzAiIGhlaWdodD0iNTQiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPg0KICA8dGV4dCB4PSIxOCIgeT0iMTY5IiBmb250LWZhbWlseT0iQ2FzY2FkaWEgTW9ubywgQ29uc29sYXMsIG1vbm9zcGFjZSIgZm9udC1zaXplPSIxNCIgbGV0dGVyLXNwYWNpbmc9IjIiIGZpbGw9IiM3YTViYjUiPjAzPC90ZXh0Pg0KICA8dGV4dCB4PSI1MiIgeT0iMTcwIiBmb250LWZhbWlseT0iU29uZ3RpIFNDLCBTVFNvbmcsIFNpbVN1biwgR2VvcmdpYSwgc2VyaWYiIGZvbnQtc2l6ZT0iMjEiIGZpbGw9IiMxOTE1MTIiPueUn+S6p+WxgjwvdGV4dD4NCiAgPHRleHQgeD0iNTIiIHk9IjE5MCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7mr4/ml6XmlLbnm5jlkI7ot5HmibkgwrcgQXV0b01MIOaJk+WIhiDCtyDlh7jkvJjljJYgwrcg5pW05omL5LiO6L+H5rukIMK3IFQrMSDosIPku5PljZU8L3RleHQ+DQoNCiAgPCEtLSDlsYLpl7Tnrq3lpLQgLS0+DQogIDxnIHN0cm9rZT0iIzdhNWJiNSIgc3Ryb2tlLXdpZHRoPSIxLjQiIGZpbGw9Im5vbmUiIG1hcmtlci1lbmQ9InVybCgjYXJjaC1hcnJvdykiPg0KICAgIDxwYXRoIGQ9Ik0zNjYgNTYgVjY4Ii8+DQogICAgPHBhdGggZD0iTTM2NiAxMjggVjE0MCIvPg0KICA8L2c+DQoNCiAgPCEtLSDlm6DlrZDlupPvvJrllK/kuIDmjqXlj6MgLS0+DQogIDxyZWN0IHg9IjgwMCIgeT0iNzIiIHdpZHRoPSIzMjAiIGhlaWdodD0iMTI2IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiM3YTViYjUiIHN0cm9rZS13aWR0aD0iMS41Ii8+DQogIDx0ZXh0IHg9Ijk2MCIgeT0iMTA4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU29uZ3RpIFNDLCBTVFNvbmcsIFNpbVN1biwgR2VvcmdpYSwgc2VyaWYiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxOTE1MTIiPuWboOWtkOW6kzwvdGV4dD4NCiAgPHRleHQgeD0iOTYwIiB5PSIxMzIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzdhNWJiNSI+5ZSv5LiA5o6l5Y+jPC90ZXh0Pg0KICA8dGV4dCB4PSI5NjAiIHk9IjE1OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkNhc2NhZGlhIE1vbm8sIENvbnNvbGFzLCBtb25vc3BhY2UiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiM0ZDQ2M2QiPnN0YXR1cyA9IHBvb2wg5omN5Y+v6K+7PC90ZXh0Pg0KICA8dGV4dCB4PSI5NjAiIHk9IjE4MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmaWxsPSIjNGQ0NjNkIj7noJTnqbblsYLlhpnlhaUgwrcg55Sf5Lqn5bGC6K+75Y+WPC90ZXh0Pg0KDQogIDwhLS0g5YaZ5YWl5LiO6K+75Y+WIC0tPg0KICA8ZyBzdHJva2U9IiM3YTViYjUiIHN0cm9rZS13aWR0aD0iMS40IiBmaWxsPSJub25lIiBtYXJrZXItZW5kPSJ1cmwoI2FyY2gtYXJyb3cpIj4NCiAgICA8cGF0aCBkPSJNNzM2IDk5IEggNzkwIi8+DQogICAgPHBhdGggZD0iTTc5MCAxNzEgSCA3NDAiLz4NCiAgPC9nPg0KICA8dGV4dCB4PSI3NjMiIHk9IjkwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiM0ZDQ2M2QiPuWGmeWFpTwvdGV4dD4NCiAgPHRleHQgeD0iNzYzIiB5PSIxNjMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzRkNDYzZCI+6K+75Y+WPC90ZXh0Pg0KPC9zdmc+DQo=" alt="ASTER 三层架构示意图：数据层用 akshare 与 CSMAR 增量取数，校验后落 Parquet 缓存；研究层在离线沙盒里挖因子，只把过门控的因子工件写入因子库；生产层每日跑批，只读 status 为 pool 的条目，落成 T+1 调仓单。" width="1120" height="216">
+          <figcaption>研究层与生产层解耦，因子库是唯一接口。生产层只读 status 为 pool 的条目。</figcaption>
+        </figure>
+
+        <div class="grid grid--3">
+          <section class="block" aria-labelledby="slide-5-data">
+            <h3 class="block__title" id="slide-5-data">数据层</h3>
+            <p class="block__text">akshare 每日增量、CSMAR 回填；校验完整性、异常值与复权一致性后落 Parquet 缓存，预计算涨跌停、复权价、交易日历与分红送转。</p>
+          </section>
+          <section class="block" aria-labelledby="slide-5-research">
+            <h3 class="block__title" id="slide-5-research">研究层</h3>
+            <p class="block__text">离线 Agent 内循环，可连跑数天；在断网沙盒里评估假设，只把过门控的因子工件写进因子库，不接触生产账户。</p>
+          </section>
+          <section class="block" aria-labelledby="slide-5-production">
+            <h3 class="block__title" id="slide-5-production">生产层</h3>
+            <p class="block__text">每个 T 日收盘后每日跑批：重算 pool 因子、AutoML 打分、凸优化组合、整手与过滤，落成 T+1 调仓单，人工跟单后回录。</p>
+          </section>
+        </div>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">05 / 11</span>
+        <span class="slide__meta">第 4 部分 / 项目</span>
+      </footer>
+    </section>
+
+    <!-- #159：第 6 页 Agent 因子挖掘 -->
+    <section class="slide" id="slide-6" data-slide="6" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-6-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 4 部分 / 项目</p>
+        <h2 class="slide__title" id="slide-6-title">Agent 因子挖掘</h2>
+      </header>
+      <div class="slide__body slide__body--split">
+        <figure class="figure">
+          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNDIwIiB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQyMCIgcm9sZT0iaW1nIj4NCiAgPHRpdGxlPkFnZW50IOWboOWtkOaMluaOmOWFreatpemXreeOrzwvdGl0bGU+DQogIDxkZXNjPuivvumimOS4i+i+vuWQju+8jOavj+i9ruW5tuihjOaPkOWHuiAzIOadoeeBteaEn++8jOWcqOaWree9keaymeebkumHjOivhOWIhu+8jOe7k+aenOaMieW6j+WGmeWFpSB0cmFjZe+8jOeUsei9ruasoeaOqOi/m+S4i+S4gOaJueeBteaEn++8m+i/h+mXqOaOp+eahOWboOWtkOi/m+WFpeWboOWtkOW6k++8jOW6k+mHjOeahOepuumameWGjeaIkOS4uuaWsOivvumimOOAgjwvZGVzYz4NCiAgPGRlZnM+DQogICAgPG1hcmtlciBpZD0ibG9vcC1hcnJvdyIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI5IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNyIgbWFya2VySGVpZ2h0PSI3IiBvcmllbnQ9ImF1dG8tc3RhcnQtcmV2ZXJzZSI+DQogICAgICA8cGF0aCBkPSJNMCAwIEwxMCA1IEwwIDEwIFoiIGZpbGw9IiM3YTViYjUiLz4NCiAgICA8L21hcmtlcj4NCiAgICA8bWFya2VyIGlkPSJsb29wLWRhc2giIHZpZXdCb3g9IjAgMCAxMCAxMCIgcmVmWD0iOSIgcmVmWT0iNSIgbWFya2VyV2lkdGg9IjciIG1hcmtlckhlaWdodD0iNyIgb3JpZW50PSJhdXRvLXN0YXJ0LXJldmVyc2UiPg0KICAgICAgPHBhdGggZD0iTTAgMCBMMTAgNSBMMCAxMCBaIiBmaWxsPSIjNGQ0NjNkIi8+DQogICAgPC9tYXJrZXI+DQogIDwvZGVmcz4NCg0KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQyMCIgZmlsbD0iI2ZjZmFmNSIvPg0KDQogIDwhLS0g6K++6aKYIC0tPg0KICA8cmVjdCB4PSIyMzYiIHk9IjYiIHdpZHRoPSIxNjgiIGhlaWdodD0iNjgiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPg0KICA8dGV4dCB4PSIzMjAiIHk9IjM4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU29uZ3RpIFNDLCBTVFNvbmcsIFNpbVN1biwgR2VvcmdpYSwgc2VyaWYiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxOTE1MTIiPuivvumimDwvdGV4dD4NCiAgPHRleHQgeD0iMzIwIiB5PSI2MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7mlrnlkJEgwrcg6aqM5pS25qCH5YeGPC90ZXh0Pg0KDQogIDwhLS0g54G15oSfIC0tPg0KICA8cmVjdCB4PSI0NDYiIHk9IjkyIiB3aWR0aD0iMTY4IiBoZWlnaHQ9IjY4IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4NCiAgPHRleHQgeD0iNTMwIiB5PSIxMjQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzE5MTUxMiI+54G15oSfPC90ZXh0Pg0KICA8dGV4dCB4PSI1MzAiIHk9IjE0NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7kuIDova4gMyDmnaE8L3RleHQ+DQoNCiAgPCEtLSDova4gLS0+DQogIDxyZWN0IHg9IjQ0NiIgeT0iMjUyIiB3aWR0aD0iMTY4IiBoZWlnaHQ9IjY4IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4NCiAgPHRleHQgeD0iNTMwIiB5PSIyODQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzE5MTUxMiI+6L2uPC90ZXh0Pg0KICA8dGV4dCB4PSI1MzAiIHk9IjMwNiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7oioLmi40gwrcgMzAg6L2u54aU5patPC90ZXh0Pg0KDQogIDwhLS0gdHJhY2UgLS0+DQogIDxyZWN0IHg9IjIzNiIgeT0iMzQ2IiB3aWR0aD0iMTY4IiBoZWlnaHQ9IjY4IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4NCiAgPHRleHQgeD0iMzIwIiB5PSIzNzgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJDYXNjYWRpYSBNb25vLCBDb25zb2xhcywgbW9ub3NwYWNlIiBmb250LXNpemU9IjI0IiBmaWxsPSIjMTkxNTEyIj50cmFjZTwvdGV4dD4NCiAgPHRleHQgeD0iMzIwIiB5PSI0MDAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+6YCQ6L2u6K6w5b2VIMK3IOazqOWFpeS4i+S4gOi9rjwvdGV4dD4NCg0KICA8IS0tIOaymeebkiAtLT4NCiAgPHJlY3QgeD0iMjYiIHk9IjI1MiIgd2lkdGg9IjE2OCIgaGVpZ2h0PSI2OCIgZmlsbD0iI2Y2ZjNlYyIgc3Ryb2tlPSIjZDZjZWJlIi8+DQogIDx0ZXh0IHg9IjExMCIgeT0iMjg0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU29uZ3RpIFNDLCBTVFNvbmcsIFNpbVN1biwgR2VvcmdpYSwgc2VyaWYiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxOTE1MTIiPuaymeebkjwvdGV4dD4NCiAgPHRleHQgeD0iMTEwIiB5PSIzMDYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+5pat572RIERvY2tlciDCtyBzY29yZS5qc29uPC90ZXh0Pg0KDQogIDwhLS0g6Zeo5o6nIC0tPg0KICA8cmVjdCB4PSIyNiIgeT0iOTIiIHdpZHRoPSIxNjgiIGhlaWdodD0iNjgiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPg0KICA8dGV4dCB4PSIxMTAiIHk9IjEyNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNvbmd0aSBTQywgU1RTb25nLCBTaW1TdW4sIEdlb3JnaWEsIHNlcmlmIiBmb250LXNpemU9IjI0IiBmaWxsPSIjMTkxNTEyIj7pl6jmjqc8L3RleHQ+DQogIDx0ZXh0IHg9IjExMCIgeT0iMTQ2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiM0ZDQ2M2QiPui/h+e6v+aJjeWFpeW6kzwvdGV4dD4NCg0KICA8IS0tIOeOr+S4iueahOeureWktCAtLT4NCiAgPGcgc3Ryb2tlPSIjN2E1YmI1IiBzdHJva2Utd2lkdGg9IjEuNCIgZmlsbD0ibm9uZSIgbWFya2VyLWVuZD0idXJsKCNsb29wLWFycm93KSI+DQogICAgPHBhdGggZD0iTTQwNCA1MiBMIDQ0NCAxMTIiLz4NCiAgICA8cGF0aCBkPSJNNTMwIDE2MCBWIDI0NiIvPg0KICAgIDxwYXRoIGQ9Ik00NDQgMzAwIEwgNDA2IDM2NCIvPg0KICAgIDxwYXRoIGQ9Ik0yMzYgMzg4IEwgMTk2IDMyOCIvPg0KICAgIDxwYXRoIGQ9Ik0xMTAgMjUyIFYgMTY2Ii8+DQogICAgPHBhdGggZD0iTTE5NiAxMjIgTCAyMzQgNjIiLz4NCiAgPC9nPg0KDQogIDwhLS0g5Zug5a2Q5bqT77ya546v5b+DIC0tPg0KICA8cmVjdCB4PSIyNjIiIHk9IjE4MCIgd2lkdGg9IjExNiIgaGVpZ2h0PSI4NiIgZmlsbD0iIzE3MTMxZiIvPg0KICA8dGV4dCB4PSIzMjAiIHk9IjIxNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNvbmd0aSBTQywgU1RTb25nLCBTaW1TdW4sIEdlb3JnaWEsIHNlcmlmIiBmb250LXNpemU9IjI0IiBmaWxsPSIjZjFlY2Y3Ij7lm6DlrZDlupM8L3RleHQ+DQogIDx0ZXh0IHg9IjMyMCIgeT0iMjM4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiNiOWE3ZTAiPuWUr+S4gOaOpeWPozwvdGV4dD4NCg0KICA8IS0tIOmXqOaOpyDihpIg5Zug5a2Q5bqTIC0tPg0KICA8cGF0aCBkPSJNMTk2IDE0MiBMIDI1OCAxOTYiIHN0cm9rZT0iIzdhNWJiNSIgc3Ryb2tlLXdpZHRoPSIxLjQiIGZpbGw9Im5vbmUiIG1hcmtlci1lbmQ9InVybCgjbG9vcC1hcnJvdykiLz4NCg0KICA8IS0tIOWboOWtkOW6kyDihpIg5paw6K++6aKYIC0tPg0KICA8cGF0aCBkPSJNMzc4IDIwOCBMIDM3OCA4MiIgc3Ryb2tlPSIjNGQ0NjNkIiBzdHJva2Utd2lkdGg9IjEuMiIgc3Ryb2tlLWRhc2hhcnJheT0iNSA1IiBmaWxsPSJub25lIiBtYXJrZXItZW5kPSJ1cmwoI2xvb3AtZGFzaCkiLz4NCiAgPHRleHQgeD0iMzg4IiB5PSIxNTAiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+5bqT55qE56m66ZqZPC90ZXh0Pg0KPC9zdmc+DQo=" alt="Agent 因子挖掘六步闭环示意图：课题下达后，每轮并行提出 3 条灵感，在断网沙盒里评分，结果按序写入 trace，由轮次推进下一批灵感；过门控的因子进入因子库，库里的空隙再成为新课题。" width="640" height="420">
+          <figcaption>六步闭环：课题 → 灵感 → 轮 → trace → 沙盒 → 门控。过线入库，不过线写回 trace。</figcaption>
+        </figure>
+
+        <div class="loop">
+          <ol class="terms">
+            <li>
+              <h3 class="term">课题</h3>
+              <p class="term__text">任务与预算单元：方向边界、禁区、验收标准；活跃课题上限 3。</p>
+            </li>
+            <li>
+              <h3 class="term">灵感</h3>
+              <p class="term__text">课题内的一次尝试，一条假设加构造思路；一轮并行评估 3 条。</p>
+            </li>
+            <li>
+              <h3 class="term">轮</h3>
+              <p class="term__text">节拍单位，全部评完才进下一轮；单课题 30 轮熔断。</p>
+            </li>
+            <li>
+              <h3 class="term">trace</h3>
+              <p class="term__text">各轮假设、评估与反馈的按序记录，作用域限单课题，下一轮注入。</p>
+            </li>
+            <li>
+              <h3 class="term">沙盒</h3>
+              <p class="term__text">断网 Docker，数据只读挂载，跑 eval.sh 得 score.json。</p>
+            </li>
+            <li>
+              <h3 class="term">门控</h3>
+              <p class="term__text">进库前必须全部通过的判定集合，给出单一过线或不过线结论。</p>
+            </li>
+          </ol>
+
+          <dl class="facts">
+            <div>
+              <dt>一轮</dt>
+              <dd>3 条灵感</dd>
+            </div>
+            <div>
+              <dt>熔断</dt>
+              <dd>30 轮</dd>
+            </div>
+            <div>
+              <dt>休眠</dt>
+              <dd>连续 3 轮无产出</dd>
+            </div>
+            <div>
+              <dt>完成</dt>
+              <dd>入库 10 个<br>低相关因子</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">06 / 11</span>
+        <span class="slide__meta">第 4 部分 / 项目</span>
+      </footer>
+    </section>
+
+    <!-- #159：第 7 页 因子库与门控 -->
+    <section class="slide" id="slide-7" data-slide="7" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-7-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 4 部分 / 项目</p>
+        <h2 class="slide__title" id="slide-7-title">因子库与门控</h2>
+      </header>
+      <div class="slide__body slide__body--tight">
+        <figure class="figure">
+          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMTIwIDEzMiIgd2lkdGg9IjExMjAiIGhlaWdodD0iMTMyIiByb2xlPSJpbWciPg0KICA8dGl0bGU+5Zug5a2Q5bqT5p6E5oiQ5LiO6KGA57uf6ZO+PC90aXRsZT4NCiAgPGRlc2M+5p2h5b2i5Zu+5oyJ6KGA57uf5pON5L2c5ouG5YiGIDI2IOS4quWboOWtkOW3peS7tu+8mjEzIOS4quenjeWtkOS9jeS6juesrCAwIOS7o++8jDEwIOS4quWPmOW8guS4jiAzIOS4quS6pOWPieS9jeS6juesrCAxIOS7o++8jOWdh+adpeiHqiBmbGFnc2hpcC1taW5pbmfjgILkuIvmlrnooYDnu5/pk77ku44gc2VlZCDmjIflkJEgbXV0YXRpb24g5LiOIGNyb3Nzb3Zlcu+8jOWGjeaxh+WFpeWboOWtkOW6k++8jOavj+adoeiusOW9leWGmeWFpSBvcOOAgXBhcmVudHPjgIFydW5faWTjgIFnZW5lcmF0aW9uIOWbm+S4quWtl+auteOAgjwvZGVzYz4NCiAgPGRlZnM+DQogICAgPG1hcmtlciBpZD0ibGliLWFycm93IiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjkiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI3IiBtYXJrZXJIZWlnaHQ9IjciIG9yaWVudD0iYXV0by1zdGFydC1yZXZlcnNlIj4NCiAgICAgIDxwYXRoIGQ9Ik0wIDAgTDEwIDUgTDAgMTAgWiIgZmlsbD0iIzdhNWJiNSIvPg0KICAgIDwvbWFya2VyPg0KICA8L2RlZnM+DQoNCiAgPHJlY3QgeD0iMCIgeT0iMCIgd2lkdGg9IjExMjAiIGhlaWdodD0iMTMyIiBmaWxsPSIjZmNmYWY1Ii8+DQoNCiAgPCEtLSDmnoTmiJDmnaHvvJoyNiA9IDEzICsgMTAgKyAzIC0tPg0KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNTYwIiBoZWlnaHQ9IjMyIiBmaWxsPSIjZDljZmYwIiBzdHJva2U9IiNmY2ZhZjUiLz4NCiAgPHJlY3QgeD0iNTYwIiB5PSIwIiB3aWR0aD0iNDMwIiBoZWlnaHQ9IjMyIiBmaWxsPSIjYjlhN2UwIiBzdHJva2U9IiNmY2ZhZjUiLz4NCiAgPHJlY3QgeD0iOTkwIiB5PSIwIiB3aWR0aD0iMTMwIiBoZWlnaHQ9IjMyIiBmaWxsPSIjN2E1YmI1IiBzdHJva2U9IiNmY2ZhZjUiLz4NCiAgPHRleHQgeD0iMjgwIiB5PSIyMiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmaWxsPSIjMTkxNTEyIj4xMyDnp43lrZA8L3RleHQ+DQogIDx0ZXh0IHg9Ijc3NSIgeT0iMjIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNSIgZmlsbD0iIzE5MTUxMiI+MTAg5Y+Y5byCPC90ZXh0Pg0KICA8dGV4dCB4PSIxMDU1IiB5PSIyMiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmaWxsPSIjZmNmYWY1Ij4zIOS6pOWPiTwvdGV4dD4NCg0KICA8dGV4dCB4PSIwIiB5PSI1NCIgZm9udC1mYW1pbHk9IkNhc2NhZGlhIE1vbm8sIENvbnNvbGFzLCBtb25vc3BhY2UiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiM0ZDQ2M2QiPuesrCAwIOS7oyDCtyBydW5faWQgbnVsbDwvdGV4dD4NCiAgPHRleHQgeD0iMTEyMCIgeT0iNTQiIHRleHQtYW5jaG9yPSJlbmQiIGZvbnQtZmFtaWx5PSJDYXNjYWRpYSBNb25vLCBDb25zb2xhcywgbW9ub3NwYWNlIiBmb250LXNpemU9IjEyIiBmaWxsPSIjNGQ0NjNkIj7nrKwgMSDku6MgwrcgcnVuX2lkIGZsYWdzaGlwLW1pbmluZzwvdGV4dD4NCg0KICA8IS0tIOihgOe7n+mTviAtLT4NCiAgPHJlY3QgeD0iMCIgeT0iNjYiIHdpZHRoPSIyMjAiIGhlaWdodD0iNjAiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPg0KICA8dGV4dCB4PSIxMTAiIHk9IjkyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iQ2FzY2FkaWEgTW9ubywgQ29uc29sYXMsIG1vbm9zcGFjZSIgZm9udC1zaXplPSIxNyIgZmlsbD0iIzE5MTUxMiI+c2VlZDwvdGV4dD4NCiAgPHRleHQgeD0iMTEwIiB5PSIxMTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzRkNDYzZCI+MTMg5p2hIMK3IHBhcmVudHMgW108L3RleHQ+DQoNCiAgPHJlY3QgeD0iMjY4IiB5PSI2NiIgd2lkdGg9IjIzMCIgaGVpZ2h0PSI2MCIgZmlsbD0iI2Y2ZjNlYyIgc3Ryb2tlPSIjZDZjZWJlIi8+DQogIDx0ZXh0IHg9IjM4MyIgeT0iOTIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJDYXNjYWRpYSBNb25vLCBDb25zb2xhcywgbW9ub3NwYWNlIiBmb250LXNpemU9IjE3IiBmaWxsPSIjMTkxNTEyIj5tdXRhdGlvbjwvdGV4dD4NCiAgPHRleHQgeD0iMzgzIiB5PSIxMTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzRkNDYzZCI+MTAg5p2hIMK3IOesrCAxIOS7ozwvdGV4dD4NCg0KICA8cmVjdCB4PSI1NDYiIHk9IjY2IiB3aWR0aD0iMjIwIiBoZWlnaHQ9IjYwIiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4NCiAgPHRleHQgeD0iNjU2IiB5PSI5MiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkNhc2NhZGlhIE1vbm8sIENvbnNvbGFzLCBtb25vc3BhY2UiIGZvbnQtc2l6ZT0iMTciIGZpbGw9IiMxOTE1MTIiPmNyb3Nzb3ZlcjwvdGV4dD4NCiAgPHRleHQgeD0iNjU2IiB5PSIxMTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzRkNDYzZCI+MyDmnaEgwrcg56ysIDEg5LujPC90ZXh0Pg0KDQogIDxyZWN0IHg9IjgxNCIgeT0iNjYiIHdpZHRoPSIzMDYiIGhlaWdodD0iNjAiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iIzdhNWJiNSIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4NCiAgPHRleHQgeD0iOTY3IiB5PSI5MiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNvbmd0aSBTQywgU1RTb25nLCBTaW1TdW4sIEdlb3JnaWEsIHNlcmlmIiBmb250LXNpemU9IjE3IiBmaWxsPSIjMTkxNTEyIj7lm6DlrZDlupM8L3RleHQ+DQogIDx0ZXh0IHg9Ijk2NyIgeT0iMTEzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiM0ZDQ2M2QiPjI2IOadoSDCtyDlhajpg6ggc3RhdHVzIOS4uiBwb29sPC90ZXh0Pg0KDQogIDxnIHN0cm9rZT0iIzdhNWJiNSIgc3Ryb2tlLXdpZHRoPSIxLjQiIGZpbGw9Im5vbmUiIG1hcmtlci1lbmQ9InVybCgjbGliLWFycm93KSI+DQogICAgPHBhdGggZD0iTTIyNiA5NiBIIDI2MiIvPg0KICAgIDxwYXRoIGQ9Ik01MDQgOTYgSCA1NDAiLz4NCiAgICA8cGF0aCBkPSJNNzcyIDk2IEggODA4Ii8+DQogIDwvZz4NCjwvc3ZnPg0K" alt="因子库构成与血统链：条形图显示 26 个因子工件中 13 个种子位于第 0 代，10 个变异与 3 个交叉位于第 1 代且来自 flagship-mining；下方血统链从 seed 指向 mutation 与 crossover，每条记录含 op、parents、run_id、generation。" width="1120" height="132">
+          <figcaption>26 个因子工件 = 13 种子 + 10 变异 + 3 交叉，全部 pool。</figcaption>
+        </figure>
+
+        <div class="grid grid--4 defense">
+          <section class="block block--tight" aria-labelledby="slide-7-d1">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-7-d1">源头分流</h3>
+            <p class="block__text">context 注入方向分布地图，要求走低密度方向。</p>
+          </section>
+          <section class="block block--tight" aria-labelledby="slide-7-d2">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-7-d2">生成避让</h3>
+            <p class="block__text">proposal 附同方向已入库因子的假设与思路。</p>
+          </section>
+          <section class="block block--tight" aria-labelledby="slide-7-d3">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-7-d3">评分折扣</h3>
+            <p class="block__text"><code class="mono">score = quality × (1 − |max_corr| / 0.7)</code>，写进 score.json。</p>
+          </section>
+          <section class="block block--tight" aria-labelledby="slide-7-d4">
+            <p class="block__index mono">04</p>
+            <h3 class="block__title" id="slide-7-d4">入库与整库</h3>
+            <p class="block__text">|max_corr| &gt; 0.7 拒入；整库同簇留强；pool ≤ 总数 50%。</p>
+          </section>
+        </div>
+
+        <p class="lineage"><code class="mono">lineage{op, parents, run_id, generation}</code> 记在每条入库记录上：op 取 seed、mutation、crossover；parents 记父因子，run_id 记来源跑批（flagship-mining），generation 记代数——第 0 代 13 条、第 1 代 13 条。</p>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">07 / 11</span>
+        <span class="slide__meta">第 4 部分 / 项目</span>
+      </footer>
+    </section>
+
+
+    <!-- #160：第 8 页 AutoML 与 AutoResearch -->
+    <section class="slide" id="slide-8" data-slide="8" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-8-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 4 部分 / 项目</p>
+        <h2 class="slide__title" id="slide-8-title">AutoML 与 AutoResearch</h2>
+      </header>
+      <div class="slide__body slide__body--tight">
+        <p class="lede">模型层把因子工件压成截面信号：AutoML 已经跑通训练到信号的全链，AutoResearch 仍是 M5 路线图。</p>
+
+        <div class="columns">
+          <section class="block block--status" id="slide-8-automl" aria-labelledby="slide-8-automl-title">
+            <div class="block__head">
+              <h3 class="block__title" id="slide-8-automl-title">AutoML</h3>
+              <span class="status status--live">已实现</span>
+            </div>
+            <ol class="chain">
+              <li>
+                <span class="chain__label">数据集工件</span>
+                <span class="chain__note">宽表 (date, instrument, 特征, label, delay_days)，特征直接用因子工件 value。</span>
+              </li>
+              <li>
+                <span class="chain__label">AutoGluon</span>
+                <span class="chain__note">Tabular + 本机 GPU，presets medium_quality；旗舰 1800 秒 / 19.9 万行。</span>
+              </li>
+              <li>
+                <span class="chain__label">walk-forward</span>
+                <span class="chain__note">AutoGluon 只训单窗口，切分与拼接在 Python 侧完成。</span>
+              </li>
+              <li>
+                <span class="chain__label">模型注册表</span>
+                <span class="chain__note">每 20 个交易日重训，500 日窗口、60 日预热；按「最新且未过期」选版。</span>
+              </li>
+              <li>
+                <span class="chain__label">信号工件</span>
+                <span class="chain__note">(date, instrument, score)，组合层与回测只读信号，不直接调模型。</span>
+              </li>
+            </ol>
+          </section>
+
+          <section class="block block--status" id="slide-8-autoresearch" aria-labelledby="slide-8-autoresearch-title">
+            <div class="block__head">
+              <h3 class="block__title" id="slide-8-autoresearch-title">AutoResearch</h3>
+              <span class="status status--planned">规划中</span>
+            </div>
+            <p class="block__text">M5 远期路线：复用 Agent 内循环，Proposal 改训练配置或模型结构代码，eval 以 walk-forward 样本外 IC 打分。</p>
+            <ul class="list list--tight">
+              <li><strong>Agent 调参</strong>：在搜索空间里改写训练配置，按样本外 IC 接受或拒绝。</li>
+              <li><strong>网络结构演化</strong>：让 Agent 改模型结构代码，与调参协同演化，参照 RD-Agent。</li>
+              <li><strong>前置依赖</strong>：M4 的滚动重训与注册表跑稳后才启动，当前不进入生产链。</li>
+            </ul>
+            <p class="note">尚无可引用的实验结论；这一栏按路线图表述，不代表已有能力。</p>
+          </section>
+        </div>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">08 / 11</span>
+        <span class="slide__meta">第 4 部分 / 项目</span>
+      </footer>
+    </section>
+
+    <!-- #160：第 9 页 组合优化与生产闭环 -->
+    <section class="slide" id="slide-9" data-slide="9" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-9-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 4 部分 / 项目</p>
+        <h2 class="slide__title" id="slide-9-title">组合优化与生产闭环</h2>
+      </header>
+      <div class="slide__body slide__body--tight">
+        <div class="grid grid--2x2 optim">
+          <section class="block block--tight" aria-labelledby="slide-9-constraints">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-9-constraints">约束族</h3>
+            <p class="block__text">满仓、禁卖空；个股带成分 ±0.005、非成分 ≤0.005；行业、市值与六风格偏离各 ±0.005×std；覆盖度 ≥ 0.5；换手 Σ|w−w_prev| ≤ 0.2。目标 min −αᵀw + λwᵀΣw，λ=1，Ledoit-Wolf 协方差。</p>
+          </section>
+
+          <section class="block block--tight" aria-labelledby="slide-9-relax">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-9-relax">放松阶梯</h3>
+            <p class="block__text">Minimize(0) 预检；不可行按风格 → 行业/市值 → 换手循环，每 3 轮一次、最多 60 轮；用尽后终局把换手上限放到 2.0，仍不可行才 STATUS_HELD 保持持仓。</p>
+          </section>
+
+          <section class="block block--tight" aria-labelledby="slide-9-frozen">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-9-frozen">冻结持仓</h3>
+            <p class="block__text">调仓日目标票停牌或触涨跌停时，订单递延到可成交日；既有仓位维持，损益照常计入；ST 不特殊处理。</p>
+          </section>
+
+          <section class="block block--tight" aria-labelledby="slide-9-lots">
+            <p class="block__index mono">04</p>
+            <h3 class="block__title" id="slide-9-lots">整手可行化</h3>
+            <p class="block__text">权重 × nav 后按板块向下取整：主板与创业板 100 股倍数，科创板 200 股、北交所 100 股起按 1 股递增；卖出允许零股出清。</p>
+          </section>
+        </div>
+
+        <ol class="flow" id="slide-9-flow" aria-label="生产闭环五步">
+          <li>
+            <span class="flow__index mono">01</span>
+            <span class="flow__label">数据增量</span>
+            <span class="flow__note">体检不过即中止</span>
+          </li>
+          <li>
+            <span class="flow__index mono">02</span>
+            <span class="flow__label">因子重算</span>
+            <span class="flow__note">只算 pool 条目</span>
+          </li>
+          <li>
+            <span class="flow__index mono">03</span>
+            <span class="flow__label">信号合成</span>
+            <span class="flow__note">AutoML 截面打分</span>
+          </li>
+          <li>
+            <span class="flow__index mono">04</span>
+            <span class="flow__label">组合优化</span>
+            <span class="flow__note">cvxpy 求解</span>
+          </li>
+          <li>
+            <span class="flow__index mono">05</span>
+            <span class="flow__label">T+1 调仓单</span>
+            <span class="flow__note">人工跟单</span>
+          </li>
+        </ol>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">09 / 11</span>
+        <span class="slide__meta">第 4 部分 / 项目</span>
+      </footer>
+    </section>
+
+    <!-- #160：第 10 页 创新点与边界 -->
+    <section class="slide" id="slide-10" data-slide="10" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-10-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 4 部分 / 项目</p>
+        <h2 class="slide__title" id="slide-10-title">创新点与边界</h2>
+      </header>
+      <div class="slide__body slide__body--tight">
+        <p class="lede">三条创新点回答「凭什么可信」，已知局限回答「结论能推到多远」。</p>
+
+        <div class="grid grid--3">
+          <section class="block" aria-labelledby="slide-10-audit">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-10-audit">可审计</h3>
+            <p class="block__text">因子入库带指标与血统链，registry.json 是唯一真源，lineage 能追到 run 与代数；课题的 trace 记录每轮假设与评分。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-10-lookahead">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-10-lookahead">防前视</h3>
+            <p class="block__text">截断重算检测比对抽检日的重算结果；信号、成交、标签共用 open-to-open 口径：T 日收盘出信号，T+1 开盘成交，标签从 T+1 开盘算起。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-10-fidelity">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-10-fidelity">执行真实度</h3>
+            <p class="block__text">账户模拟器兼任生产虚拟账户：T+1、分板块涨跌停、整手、停牌、佣金印花税滑点、分红送转都走同一套规则，回测指标与调仓单同源。</p>
+          </section>
+        </div>
+
+        <section class="limits" aria-labelledby="slide-10-limits">
+          <h3 class="block__title" id="slide-10-limits">已知局限</h3>
+          <ul class="limits__list">
+            <li>幸存者偏差：akshare 对退市股覆盖不全，历史股票池偏乐观。</li>
+            <li>接口变动：数据源可能改字段或限流，锁版本并做校验熔断。</li>
+            <li>样本外段约 180 天，统计功效有限，不足以证明长期稳定。</li>
+            <li>因子入选用全样本行情，存在选择泄漏边界，数字需要打折。</li>
+            <li>指增是多次实验中的一个配置，不是唯一策略。</li>
+            <li>历史回测，非实盘，不构成投资建议。</li>
+          </ul>
+        </section>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">10 / 11</span>
+        <span class="slide__meta">第 4 部分 / 项目</span>
+      </footer>
+    </section>
+
+    <!-- #160：第 11 页 未来规划 -->
+    <section class="slide" id="slide-11" data-slide="11" data-part="5" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-11-title">
+      <header class="slide__header">
+        <p class="slide__kicker">第 5 部分 / 未来规划</p>
+        <h2 class="slide__title" id="slide-11-title">未来规划</h2>
+      </header>
+      <div class="slide__body">
+        <div class="grid grid--3 plan">
+          <section class="block" aria-labelledby="slide-11-short">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-11-short">短期</h3>
+            <ul class="list list--tight">
+              <li>因子评估 v2 落地：六道门控、参考池快照、排序键交回课题层。</li>
+              <li>课题体系接线：topics/&lt;id&gt;.md 作为真源，状态机与调度器对齐。</li>
+              <li>整库与容量规则复算：聚簇阈值、pool 上限与删除策略重新标定。</li>
+            </ul>
+          </section>
+
+          <section class="block" aria-labelledby="slide-11-long">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-11-long">长期</h3>
+            <ul class="list list--tight">
+              <li>AutoResearch M5：Agent 调参与网络结构演化，按样本外 IC 打分。</li>
+              <li>Barra PnL 相似门（#140）：把风格暴露的 PnL 相关性纳入门控。</li>
+              <li>DRO 目标与 IM 对冲（#73 / #72）：从 backlog 进入实验。</li>
+            </ul>
+          </section>
+
+          <section class="block" aria-labelledby="slide-11-view">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-11-view">领域认知</h3>
+            <ul class="list list--tight">
+              <li>alpha 衰减快，任何因子都要按样本外重新定价。</li>
+              <li>换手与费用是硬约束，先看成本再看收益。</li>
+              <li>样本外纪律优先于 IC 排名；系统价值在可复现流水线与可执行调仓单。</li>
+            </ul>
+          </section>
+        </div>
+
+        <p class="strip">下一步不追因子数量，先把评估、课题与容量三条规则钉死。</p>
+      </div>
+      <footer class="slide__footer">
+        <span class="slide__folio mono">11 / 11</span>
+        <span class="slide__meta">第 5 部分 / 未来规划</span>
+      </footer>
+    </section>
+  </main>
+
+  <div class="deck-chrome">
+    <div class="deck-progress" role="progressbar" aria-label="幻灯片进度" aria-valuemin="1" aria-valuemax="11" aria-valuenow="1">
+      <span class="deck-progress__bar" data-progress></span>
+    </div>
+    <nav class="deck-bar" aria-label="幻灯片导航">
+      <button class="deck-bar__button" type="button" data-action="prev" aria-label="上一页" disabled>上一页</button>
+      <p class="deck-bar__status" aria-live="polite">
+        <span data-current>1</span>
+        <span aria-hidden="true">/</span>
+        <span class="mono">11</span>
+      </p>
+      <button class="deck-bar__button" type="button" data-action="next" aria-label="下一页">下一页</button>
+    </nav>
+    <p class="rotate-hint">竖屏下画面较小，请横屏或用浏览器全屏查看。</p>
+  </div>
+
+  <script type="module">
+/**
+ * 幻灯片路由的纯逻辑：解析 hash、夹取页码、前后翻页。
+ *
+ * 不依赖浏览器环境，浏览器直接 import，vitest 在 node 里跑同一份实现。
+ * 页码范围固定在 1..11，任何越界输入都会被夹取。
+ */
+
+const FIRST_SLIDE = 1;
+const LAST_SLIDE = 11;
+const SLIDE_COUNT = LAST_SLIDE - FIRST_SLIDE + 1;
+
+/**
+ * 把任意输入夹到 1..11。
+ * 非数字回落到第 1 页，小数截断，越界夹到首末页。
+ */
+function clampSlide(n) {
+  const value = Number(n);
+  if (!Number.isFinite(value)) return FIRST_SLIDE;
+  const truncated = Math.trunc(value);
+  return Math.min(Math.max(truncated, FIRST_SLIDE), LAST_SLIDE);
+}
+
+/**
+ * 解析 location.hash 形式的字符串。
+ * `#3` 得 3，`#3?x` 也只取开头的数字；空串、`#`、非数字与负数回落到第 1 页。
+ */
+function parseSlideHash(hash) {
+  if (typeof hash !== "string") return FIRST_SLIDE;
+  const body = hash.trim().replace(/^#/, "");
+  const match = /^-?\d+/.exec(body);
+  if (!match) return FIRST_SLIDE;
+  return clampSlide(Number.parseInt(match[0], 10));
+}
+
+/** 上一页，首页保持首页。 */
+function prevSlide(n) {
+  return clampSlide(clampSlide(n) - 1);
+}
+
+/** 下一页，末页保持末页。 */
+function nextSlide(n) {
+  return clampSlide(clampSlide(n) + 1);
+}
+
+/** 页码对应的 hash，输出前先夹取。 */
+function slideHash(n) {
+  return `#${clampSlide(n)}`;
+}
+
+/**
+ * 幻灯片交互：深链接、键盘翻页、页码与进度同步、16:9 缩放。
+ * 路由解析与页码夹取全部来自纯模块 slides-route.js，本文件只做 DOM 接线。
+ */
+
+
+const DESIGN_WIDTH = 1280;
+
+const deck = document.querySelector(".deck");
+const slides = Array.from(document.querySelectorAll("[data-slide]"));
+const prevButton = document.querySelector('[data-action="prev"]');
+const nextButton = document.querySelector('[data-action="next"]');
+const currentOutput = document.querySelector("[data-current]");
+const progressBar = document.querySelector("[data-progress]");
+const progressTrack = document.querySelector('[role="progressbar"]');
+const slideLinks = Array.from(document.querySelectorAll("[data-slide-link]"));
+
+let current = FIRST_SLIDE;
+
+function render() {
+  for (const slide of slides) {
+    const page = Number(slide.getAttribute("data-slide"));
+    slide.classList.toggle("is-current", page === current);
+  }
+
+  if (currentOutput) currentOutput.textContent = String(current);
+  if (prevButton) prevButton.disabled = current === FIRST_SLIDE;
+  if (nextButton) nextButton.disabled = current === LAST_SLIDE;
+
+  if (progressBar) progressBar.style.width = `${(current / LAST_SLIDE) * 100}%`;
+  if (progressTrack) progressTrack.setAttribute("aria-valuenow", String(current));
+
+  for (const link of slideLinks) {
+    if (Number(link.getAttribute("data-slide-link")) === current) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  }
+}
+
+function writeHash() {
+  const target = slideHash(current);
+  if (window.location.hash === target) return;
+
+  try {
+    window.history.replaceState(null, "", target);
+  } catch (error) {
+    // file:// 下部分浏览器对 replaceState 抛 SecurityError，降级为直接改 hash。
+    window.location.hash = target;
+  }
+}
+
+function show(page, { syncHash = true } = {}) {
+  const target = clampSlide(page);
+  if (target === current) {
+    if (syncHash) writeHash();
+    return;
+  }
+
+  current = target;
+  render();
+  if (syncHash) writeHash();
+}
+
+function fit() {
+  if (!deck) return;
+  const width = deck.getBoundingClientRect().width;
+  if (!width) return;
+  document.documentElement.style.setProperty("--slide-scale", String(width / DESIGN_WIDTH));
+}
+
+prevButton?.addEventListener("click", () => show(prevSlide(current)));
+nextButton?.addEventListener("click", () => show(nextSlide(current)));
+
+window.addEventListener("hashchange", () => {
+  const target = parseSlideHash(window.location.hash);
+  if (target !== current) show(target, { syncHash: false });
+});
+
+window.addEventListener("popstate", () => {
+  const target = parseSlideHash(window.location.hash);
+  if (target !== current) show(target, { syncHash: false });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+
+  const target = event.target;
+  if (target instanceof HTMLElement) {
+    if (target.isContentEditable) return;
+    if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+  }
+
+  switch (event.key) {
+    case "ArrowRight":
+    case "PageDown":
+      show(nextSlide(current));
+      break;
+    case "ArrowLeft":
+    case "PageUp":
+      show(prevSlide(current));
+      break;
+    case "Home":
+      show(FIRST_SLIDE);
+      break;
+    case "End":
+      show(LAST_SLIDE);
+      break;
+    default:
+      return;
+  }
+
+  event.preventDefault();
+});
+
+current = parseSlideHash(window.location.hash);
+render();
+
+if (deck) {
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(fit).observe(deck);
+  } else {
+    window.addEventListener("resize", fit, { passive: true });
+  }
+  fit();
+}
+
+writeHash();
+
+  </script>
+</body>
+</html>

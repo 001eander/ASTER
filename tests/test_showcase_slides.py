@@ -6,6 +6,10 @@
 与 AutoResearch 规划中的并列、组合优化四要点与五步闭环、三条创新点与
 已知局限、短期与长期与领域认知）、默认与无 JS 状态、打印钩子、
 本地资源边界，以及纯路由模块的存在与引用。
+
+另有 #161 的单文件导出验收：控件区的下载链接与文件名、导出页的 11 页、
+内联样式与模块脚本、图片 data URI、无站点目录引用，以及导出页与生成器
+输出的字节一致。
 深链接与翻页边界的行为由 `src/slides-route.test.ts` 覆盖。
 """
 
@@ -575,3 +579,101 @@ def test_no_phone_analytics_or_cookie(source: str, page: Page) -> None:
             assert marker not in lowered, f"{path.name} 含分析脚本 {marker}"
         assert "document.cookie" not in lowered, f"{path.name} 读写 Cookie"
     assert "tel:" not in source.lower()
+
+
+# 单文件导出（#161）
+
+EXPORT = SLIDES / "export.html"
+
+
+@pytest.fixture(scope="module")
+def export_source() -> str:
+    assert EXPORT.exists(), "缺少 site/slides/export.html，请运行 scripts/build_slides_export.py"
+    return EXPORT.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+
+@pytest.fixture(scope="module")
+def export_page(export_source: str) -> Page:
+    parser = Page()
+    parser.feed(export_source)
+    parser.close()
+    return parser
+
+
+def test_controls_offer_single_file_download(source: str, page: Page) -> None:
+    links = [element for element in page.find("a") if "download" in element.attrs]
+    assert len(links) == 1, "控件区应只有一个下载链接"
+    link = links[0]
+    assert link.attrs["download"] == f"{TITLE}.html"
+    assert link.attrs["href"] == "export.html"
+    assert "deck-bar__download" in link.attrs.get("class", "").split()
+
+    inline = re.search(r'<a\b[^>]*\bdownload="[^"]*"[^>]*>(.*?)</a>', source, re.S)
+    assert inline and compact(inline.group(1)), "下载链接需要可读文字"
+
+    bar = source[source.index('<nav class="deck-bar"'): source.index("</nav>")]
+    assert 'download="' in bar, "下载链接应放在打印时会被隐藏的控件条内"
+
+
+def test_export_keeps_every_slide(export_source: str, export_page: Page) -> None:
+    slides = export_page.slides()
+    assert [element.attrs["data-slide"] for element in slides] == [
+        str(number) for number in range(1, PAGE_COUNT + 1)
+    ]
+    assert export_page.title == TITLE
+    assert export_source.lstrip().lower().startswith("<!doctype html>")
+
+
+def test_export_inlines_styles_in_order(export_source: str) -> None:
+    links = re.findall(r"<link\b[^>]*>", export_source)
+    assert not [value for value in links if 'rel="stylesheet"' in value], "导出页不应再有样式表链接"
+    styles = re.findall(r"<style\b[^>]*>(.*?)</style>", export_source, re.S)
+    assert len(styles) >= 2, "tokens 与 slides.css 都应内联为 style"
+    assert "--color-accent:" in styles[0], "第一个 style 应是 tokens.css"
+    assert any(".deck-bar" in body for body in styles[1:]), "第二个 style 应是 slides.css"
+    assert export_source.index("--color-accent:") < export_source.index(".deck-bar {")
+    assert "@media print" in export_source, "导出页仍应带打印规则"
+
+
+def test_export_inlines_module_script(export_source: str) -> None:
+    inline = re.findall(r"<script\b([^>]*)>(.*?)</script>", export_source, re.S)
+    assert not [attrs for attrs, _ in inline if "src" in attrs], "导出页不应再有外链脚本"
+    modules = [body for attrs, body in inline if 'type="module"' in attrs]
+    assert len(modules) == 1, "路由与交互应合成一个内联模块"
+    module = modules[0]
+    for token in ("clampSlide", "parseSlideHash", "ArrowRight", "Home", "hashchange", "replaceState"):
+        assert token in module, f"内联模块缺少 {token}"
+    assert not re.search(r"^\s*import\b", module, re.M), "内联模块不应再 import"
+    assert not re.search(r"^\s*export\b", module, re.M), "内联模块不应保留 export 关键字"
+    assert 'classList.remove("no-js")' in export_source, "head 里的内联脚本要保留"
+
+
+def test_export_inlines_every_image(export_page: Page) -> None:
+    images = export_page.find("img")
+    assert len(images) == 3
+    for image in images:
+        assert image.attrs.get("src", "").startswith("data:image/"), "图片必须内联为 data URI"
+        assert image.attrs.get("alt", "").strip(), "每张图片都必须有 alt"
+
+
+def test_export_has_no_site_directory_references(export_source: str, export_page: Page) -> None:
+    for needle in ("../", "slides.css", "slides.js", "assets/", "http://", "https://"):
+        assert needle not in export_source, f"导出文件仍引用 {needle}"
+    assert not [element for element in export_page.find("a") if "download" in element.attrs], (
+        "导出页不应再提供下载自己的链接"
+    )
+
+
+def test_export_matches_generator_output(tmp_path: Path, export_source: str) -> None:
+    from scripts.build_slides_export import build_export
+
+    first = tmp_path / "first.html"
+    second = tmp_path / "second.html"
+    build_export(output=first)
+    build_export(output=second)
+
+    data = first.read_bytes()
+    assert first.read_bytes() == second.read_bytes(), "导出必须字节级确定"
+    assert not data.startswith(b"\xef\xbb\xbf"), "导出文件不能带 BOM"
+    assert b"\r\n" not in data, "导出文件必须用 LF"
+    assert data == EXPORT.read_bytes(), "export.html 与生成器输出不一致，请重新导出并提交"

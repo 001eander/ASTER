@@ -1,3 +1,6 @@
 # Windows 工作区默认把 .sh 检出为 CRLF，Linux 容器执行 CRLF 脚本会报 \r 错误。
 # 强制 shell 脚本以 LF 入库与检出。
 *.sh text eol=lf
+
+# 展示站是纯静态产物，导出页需要按字节比对，统一 LF 避免 Windows 检出成 CRLF。
+site/** text eol=lf

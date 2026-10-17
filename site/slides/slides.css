@@ -1,4 +1,4 @@
-/* ASTER 答辩 deck：固定 1280x720 设计坐标，外层按 16:9 缩放。复用 ../assets/tokens.css。 */
+/* ASTER 答辩 deck：固定 1280x720 设计坐标，外层按 16:9 缩放。颜色与字体沿用共享 token 文件。 */
 
 :root {
   /* 设计坐标与缩放 */
@@ -744,6 +744,25 @@ a {
   font-family: var(--font-mono);
   font-size: var(--slide-small);
   letter-spacing: 0.1em;
+}
+
+.deck-bar__download {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 18px;
+  border: var(--rule);
+  background: transparent;
+  color: var(--color-ink-muted);
+  font-size: var(--slide-small);
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  transition: border-color var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+.deck-bar__download:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .rotate-hint {
