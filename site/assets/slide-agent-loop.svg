@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" width="640" height="420" role="img">
+  <title>Agent 因子挖掘六步闭环</title>
+  <desc>课题下达后，每轮并行提出 3 条灵感，在断网沙盒里评分，结果按序写入 trace，由轮次推进下一批灵感；过门控的因子进入因子库，库里的空隙再成为新课题。</desc>
+  <defs>
+    <marker id="loop-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7a5bb5"/>
+    </marker>
+    <marker id="loop-dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#4d463d"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="640" height="420" fill="#fcfaf5"/>
+
+  <!-- 课题 -->
+  <rect x="236" y="6" width="168" height="68" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="320" y="38" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="24" fill="#191512">课题</text>
+  <text x="320" y="60" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">方向 · 验收标准</text>
+
+  <!-- 灵感 -->
+  <rect x="446" y="92" width="168" height="68" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="530" y="124" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="24" fill="#191512">灵感</text>
+  <text x="530" y="146" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">一轮 3 条</text>
+
+  <!-- 轮 -->
+  <rect x="446" y="252" width="168" height="68" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="530" y="284" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="24" fill="#191512">轮</text>
+  <text x="530" y="306" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">节拍 · 30 轮熔断</text>
+
+  <!-- trace -->
+  <rect x="236" y="346" width="168" height="68" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="320" y="378" text-anchor="middle" font-family="Cascadia Mono, Consolas, monospace" font-size="24" fill="#191512">trace</text>
+  <text x="320" y="400" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">逐轮记录 · 注入下一轮</text>
+
+  <!-- 沙盒 -->
+  <rect x="26" y="252" width="168" height="68" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="110" y="284" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="24" fill="#191512">沙盒</text>
+  <text x="110" y="306" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">断网 Docker · score.json</text>
+
+  <!-- 门控 -->
+  <rect x="26" y="92" width="168" height="68" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="110" y="124" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="24" fill="#191512">门控</text>
+  <text x="110" y="146" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">过线才入库</text>
+
+  <!-- 环上的箭头 -->
+  <g stroke="#7a5bb5" stroke-width="1.4" fill="none" marker-end="url(#loop-arrow)">
+    <path d="M404 52 L 444 112"/>
+    <path d="M530 160 V 246"/>
+    <path d="M444 300 L 406 364"/>
+    <path d="M236 388 L 196 328"/>
+    <path d="M110 252 V 166"/>
+    <path d="M196 122 L 234 62"/>
+  </g>
+
+  <!-- 因子库：环心 -->
+  <rect x="262" y="180" width="116" height="86" fill="#17131f"/>
+  <text x="320" y="214" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="24" fill="#f1ecf7">因子库</text>
+  <text x="320" y="238" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#b9a7e0">唯一接口</text>
+
+  <!-- 门控 → 因子库 -->
+  <path d="M196 142 L 258 196" stroke="#7a5bb5" stroke-width="1.4" fill="none" marker-end="url(#loop-arrow)"/>
+
+  <!-- 因子库 → 新课题 -->
+  <path d="M378 208 L 378 82" stroke="#4d463d" stroke-width="1.2" stroke-dasharray="5 5" fill="none" marker-end="url(#loop-dash)"/>
+  <text x="388" y="150" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">库的空隙</text>
+</svg>

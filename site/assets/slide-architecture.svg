@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 216" width="1120" height="216" role="img">
+  <title>ASTER 三层架构与因子库接口</title>
+  <desc>数据层负责取数与缓存，向下供数；研究层在离线沙盒里挖因子，只把过门控的因子工件写入因子库；生产层每日跑批，只读因子库中 status 为 pool 的条目，落成 T+1 调仓单。</desc>
+  <defs>
+    <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7a5bb5"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="216" fill="#fcfaf5"/>
+
+  <!-- 数据层 -->
+  <rect x="0" y="0" width="730" height="54" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="18" y="25" font-family="Cascadia Mono, Consolas, monospace" font-size="14" letter-spacing="2" fill="#7a5bb5">01</text>
+  <text x="52" y="26" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="21" fill="#191512">数据层</text>
+  <text x="52" y="46" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">akshare · CSMAR 回填 · 校验与版本锁 · Parquet 缓存 · 预计算涨跌停与复权</text>
+
+  <!-- 研究层 -->
+  <rect x="0" y="72" width="730" height="54" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="18" y="97" font-family="Cascadia Mono, Consolas, monospace" font-size="14" letter-spacing="2" fill="#7a5bb5">02</text>
+  <text x="52" y="98" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="21" fill="#191512">研究层</text>
+  <text x="52" y="118" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">离线 Agent 内循环 · 断网沙盒评分 · 只写入过门控的因子工件</text>
+
+  <!-- 生产层 -->
+  <rect x="0" y="144" width="730" height="54" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="18" y="169" font-family="Cascadia Mono, Consolas, monospace" font-size="14" letter-spacing="2" fill="#7a5bb5">03</text>
+  <text x="52" y="170" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="21" fill="#191512">生产层</text>
+  <text x="52" y="190" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">每日收盘后跑批 · AutoML 打分 · 凸优化 · 整手与过滤 · T+1 调仓单</text>
+
+  <!-- 层间箭头 -->
+  <g stroke="#7a5bb5" stroke-width="1.4" fill="none" marker-end="url(#arch-arrow)">
+    <path d="M366 56 V68"/>
+    <path d="M366 128 V140"/>
+  </g>
+
+  <!-- 因子库：唯一接口 -->
+  <rect x="800" y="72" width="320" height="126" fill="#f6f3ec" stroke="#7a5bb5" stroke-width="1.5"/>
+  <text x="960" y="108" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="24" fill="#191512">因子库</text>
+  <text x="960" y="132" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" fill="#7a5bb5">唯一接口</text>
+  <text x="960" y="158" text-anchor="middle" font-family="Cascadia Mono, Consolas, monospace" font-size="12" fill="#4d463d">status = pool 才可读</text>
+  <text x="960" y="183" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#4d463d">研究层写入 · 生产层读取</text>
+
+  <!-- 写入与读取 -->
+  <g stroke="#7a5bb5" stroke-width="1.4" fill="none" marker-end="url(#arch-arrow)">
+    <path d="M736 99 H 790"/>
+    <path d="M790 171 H 740"/>
+  </g>
+  <text x="763" y="90" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#4d463d">写入</text>
+  <text x="763" y="163" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#4d463d">读取</text>
+</svg>

@@ -152,14 +152,40 @@
       </footer>
     </section>
 
-    <!-- #159 填充：第 4 页 项目总览 -->
+    <!-- #159：第 4 页 项目总览 -->
     <section class="slide" id="slide-4" data-slide="4" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-4-title">
       <header class="slide__header">
         <p class="slide__kicker">第 4 部分 / 项目</p>
-        <h2 class="slide__title" id="slide-4-title">待补充</h2>
+        <h2 class="slide__title" id="slide-4-title">项目总览</h2>
       </header>
       <div class="slide__body">
-        <p class="slide__pending">本页内容待补充，由后续票据填充。</p>
+        <p class="lede">A 股 alpha 衰减快，靠单因子与手工调参撑不住；研究脚本散落，回测与跟单口径不一，结论难以复现。ASTER 把这条研究链做成可以持续运行的流水线。</p>
+
+        <div class="grid grid--3">
+          <section class="block" aria-labelledby="slide-4-problem">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-4-problem">问题</h3>
+            <p class="block__text">假设靠人想，试错靠手跑；样本外与实盘口径不一致；因子、信号与组合散在三处，改一个环节牵动全局。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-4-goal">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-4-goal">目标</h3>
+            <p class="block__text">Agent 提假设、沙盒评分、门控入库；每天收盘后跑完整链，产出可执行的 T+1 调仓单。结论可复现，过程可审计。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-4-layers">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-4-layers">三层架构</h3>
+            <ul class="list list--tight">
+              <li><strong>数据层</strong>：增量、校验、缓存与预计算。</li>
+              <li><strong>研究层</strong>：离线跑 Agent 内循环，只写因子库。</li>
+              <li><strong>生产层</strong>：每日跑批，读因子库，落调仓单。</li>
+            </ul>
+          </section>
+        </div>
+
+        <p class="strip">研究层与生产层解耦，因子库是唯一接口；交接物只有因子工件与信号工件。</p>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">04 / 11</span>
@@ -167,14 +193,32 @@
       </footer>
     </section>
 
-    <!-- #159 填充：第 5 页 系统架构 -->
+    <!-- #159：第 5 页 系统架构 -->
     <section class="slide" id="slide-5" data-slide="5" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-5-title">
       <header class="slide__header">
         <p class="slide__kicker">第 4 部分 / 项目</p>
-        <h2 class="slide__title" id="slide-5-title">待补充</h2>
+        <h2 class="slide__title" id="slide-5-title">系统架构</h2>
       </header>
-      <div class="slide__body">
-        <p class="slide__pending">本页内容待补充，由后续票据填充。</p>
+      <div class="slide__body slide__body--tight">
+        <figure class="figure">
+          <img src="../assets/slide-architecture.svg" alt="ASTER 三层架构示意图：数据层用 akshare 与 CSMAR 增量取数，校验后落 Parquet 缓存；研究层在离线沙盒里挖因子，只把过门控的因子工件写入因子库；生产层每日跑批，只读 status 为 pool 的条目，落成 T+1 调仓单。" width="1120" height="216">
+          <figcaption>研究层与生产层解耦，因子库是唯一接口。生产层只读 status 为 pool 的条目。</figcaption>
+        </figure>
+
+        <div class="grid grid--3">
+          <section class="block" aria-labelledby="slide-5-data">
+            <h3 class="block__title" id="slide-5-data">数据层</h3>
+            <p class="block__text">akshare 每日增量、CSMAR 回填；校验完整性、异常值与复权一致性后落 Parquet 缓存，预计算涨跌停、复权价、交易日历与分红送转。</p>
+          </section>
+          <section class="block" aria-labelledby="slide-5-research">
+            <h3 class="block__title" id="slide-5-research">研究层</h3>
+            <p class="block__text">离线 Agent 内循环，可连跑数天；在断网沙盒里评估假设，只把过门控的因子工件写进因子库，不接触生产账户。</p>
+          </section>
+          <section class="block" aria-labelledby="slide-5-production">
+            <h3 class="block__title" id="slide-5-production">生产层</h3>
+            <p class="block__text">每个 T 日收盘后每日跑批：重算 pool 因子、AutoML 打分、凸优化组合、整手与过滤，落成 T+1 调仓单，人工跟单后回录。</p>
+          </section>
+        </div>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">05 / 11</span>
@@ -182,14 +226,65 @@
       </footer>
     </section>
 
-    <!-- #159 填充：第 6 页 Agent 因子挖掘 -->
+    <!-- #159：第 6 页 Agent 因子挖掘 -->
     <section class="slide" id="slide-6" data-slide="6" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-6-title">
       <header class="slide__header">
         <p class="slide__kicker">第 4 部分 / 项目</p>
-        <h2 class="slide__title" id="slide-6-title">待补充</h2>
+        <h2 class="slide__title" id="slide-6-title">Agent 因子挖掘</h2>
       </header>
-      <div class="slide__body">
-        <p class="slide__pending">本页内容待补充，由后续票据填充。</p>
+      <div class="slide__body slide__body--split">
+        <figure class="figure">
+          <img src="../assets/slide-agent-loop.svg" alt="Agent 因子挖掘六步闭环示意图：课题下达后，每轮并行提出 3 条灵感，在断网沙盒里评分，结果按序写入 trace，由轮次推进下一批灵感；过门控的因子进入因子库，库里的空隙再成为新课题。" width="640" height="420">
+          <figcaption>六步闭环：课题 → 灵感 → 轮 → trace → 沙盒 → 门控。过线入库，不过线写回 trace。</figcaption>
+        </figure>
+
+        <div class="loop">
+          <ol class="terms">
+            <li>
+              <h3 class="term">课题</h3>
+              <p class="term__text">任务与预算单元：方向边界、禁区、验收标准；活跃课题上限 3。</p>
+            </li>
+            <li>
+              <h3 class="term">灵感</h3>
+              <p class="term__text">课题内的一次尝试，一条假设加构造思路；一轮并行评估 3 条。</p>
+            </li>
+            <li>
+              <h3 class="term">轮</h3>
+              <p class="term__text">节拍单位，全部评完才进下一轮；单课题 30 轮熔断。</p>
+            </li>
+            <li>
+              <h3 class="term">trace</h3>
+              <p class="term__text">各轮假设、评估与反馈的按序记录，作用域限单课题，下一轮注入。</p>
+            </li>
+            <li>
+              <h3 class="term">沙盒</h3>
+              <p class="term__text">断网 Docker，数据只读挂载，跑 eval.sh 得 score.json。</p>
+            </li>
+            <li>
+              <h3 class="term">门控</h3>
+              <p class="term__text">进库前必须全部通过的判定集合，给出单一过线或不过线结论。</p>
+            </li>
+          </ol>
+
+          <dl class="facts">
+            <div>
+              <dt>一轮</dt>
+              <dd>3 条灵感</dd>
+            </div>
+            <div>
+              <dt>熔断</dt>
+              <dd>30 轮</dd>
+            </div>
+            <div>
+              <dt>休眠</dt>
+              <dd>连续 3 轮无产出</dd>
+            </div>
+            <div>
+              <dt>完成</dt>
+              <dd>入库 10 个<br>低相关因子</dd>
+            </div>
+          </dl>
+        </div>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">06 / 11</span>
@@ -197,20 +292,49 @@
       </footer>
     </section>
 
-    <!-- #159 填充：第 7 页 因子库与门控 -->
+    <!-- #159：第 7 页 因子库与门控 -->
     <section class="slide" id="slide-7" data-slide="7" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-7-title">
       <header class="slide__header">
         <p class="slide__kicker">第 4 部分 / 项目</p>
-        <h2 class="slide__title" id="slide-7-title">待补充</h2>
+        <h2 class="slide__title" id="slide-7-title">因子库与门控</h2>
       </header>
-      <div class="slide__body">
-        <p class="slide__pending">本页内容待补充，由后续票据填充。</p>
+      <div class="slide__body slide__body--tight">
+        <figure class="figure">
+          <img src="../assets/slide-factor-library.svg" alt="因子库构成与血统链：条形图显示 26 个因子工件中 13 个种子位于第 0 代，10 个变异与 3 个交叉位于第 1 代且来自 flagship-mining；下方血统链从 seed 指向 mutation 与 crossover，每条记录含 op、parents、run_id、generation。" width="1120" height="132">
+          <figcaption>26 个因子工件 = 13 种子 + 10 变异 + 3 交叉，全部 pool。</figcaption>
+        </figure>
+
+        <div class="grid grid--4 defense">
+          <section class="block block--tight" aria-labelledby="slide-7-d1">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-7-d1">源头分流</h3>
+            <p class="block__text">context 注入方向分布地图，要求走低密度方向。</p>
+          </section>
+          <section class="block block--tight" aria-labelledby="slide-7-d2">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-7-d2">生成避让</h3>
+            <p class="block__text">proposal 附同方向已入库因子的假设与思路。</p>
+          </section>
+          <section class="block block--tight" aria-labelledby="slide-7-d3">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-7-d3">评分折扣</h3>
+            <p class="block__text"><code class="mono">score = quality × (1 − |max_corr| / 0.7)</code>，写进 score.json。</p>
+          </section>
+          <section class="block block--tight" aria-labelledby="slide-7-d4">
+            <p class="block__index mono">04</p>
+            <h3 class="block__title" id="slide-7-d4">入库与整库</h3>
+            <p class="block__text">|max_corr| &gt; 0.7 拒入；整库同簇留强；pool ≤ 总数 50%。</p>
+          </section>
+        </div>
+
+        <p class="lineage"><code class="mono">lineage{op, parents, run_id, generation}</code> 记在每条入库记录上：op 取 seed、mutation、crossover；parents 记父因子，run_id 记来源跑批（flagship-mining），generation 记代数——第 0 代 13 条、第 1 代 13 条。</p>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">07 / 11</span>
         <span class="slide__meta">第 4 部分 / 项目</span>
       </footer>
     </section>
+
 
     <!-- #160 填充：第 8 页 AutoML 与 AutoResearch -->
     <section class="slide" id="slide-8" data-slide="8" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-8-title">
