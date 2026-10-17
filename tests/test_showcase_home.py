@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from html.parser import HTMLParser
 from pathlib import Path
@@ -12,11 +13,15 @@ from xml.etree import ElementTree
 
 import pytest
 
+from scripts.build_site_assets import flatten_metrics, format_metric
+
 ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / "site"
 HOME = SITE / "index.html"
 TOKENS = SITE / "assets" / "tokens.css"
 SITE_CSS = SITE / "assets" / "site.css"
+METRICS = SITE / "assets" / "metrics.json"
+REGISTRY = ROOT / "factor_library" / "registry.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "pages.yml"
 
 TITLE = "【拉普拉斯奖学金】陶唐-上海财经大学-本科-数据科学与大数据技术-2024级"
@@ -714,3 +719,198 @@ def test_production_flow_stacks_on_phone_without_overflow() -> None:
     assert stacked, "390 宽度下流程条应纵向排列或换行"
     for body in stacked:
         assert "width:" not in body or "min-width: 0" in body, "窄屏规则不应写死宽度"
+
+
+# ---------------------------------------------------------------------------
+# 证据区与指标资产（#157）
+# ---------------------------------------------------------------------------
+
+FLAGSHIP_DISPLAY = {
+    "flagship.start": "2025-01-02",
+    "flagship.end": "2026-09-28",
+    "flagship.benchmark": "000300",
+    "flagship.rebalance": "周频",
+    "flagship.initial_cash": "10 万",
+    "flagship.total_return": "13.66%",
+    "flagship.excess_return": "0.04%",
+    "flagship.max_drawdown": "-23.58%",
+    "flagship.sharpe": "0.41",
+    "flagship.trades": "950",
+    "flagship.rejects": "1",
+    "flagship.cost_ratio": "10.0%",
+}
+
+ZZ1000_DISPLAY = {
+    "zz1000.start": "2025-01-02",
+    "zz1000.end": "2026-09-28",
+    "zz1000.benchmark": "000852",
+    "zz1000.rebalance": "月频",
+    "zz1000.initial_cash": "100 万",
+    "zz1000.total_return": "33.98%",
+    "zz1000.excess_return": "6.48%",
+    "zz1000.max_drawdown": "-12.34%",
+    "zz1000.sharpe": "1.11",
+}
+
+DISCLAIMER = "历史回测，非实盘，不构成投资建议"
+ZZ1000_NOTE = "多次实验中的一个配置，不是旗舰策略"
+
+
+def load_metrics() -> dict:
+    assert METRICS.exists(), "缺少 site/assets/metrics.json"
+    return json.loads(METRICS.read_text(encoding="utf-8"))
+
+
+def metric_values(source: str) -> dict[str, str]:
+    """按 data-metric 取元素自身的文本。"""
+    pairs = re.findall(
+        r'<([a-z0-9]+)([^>]*\sdata-metric="([^"]+)"[^>]*)>([^<]*)</\1>',
+        source,
+        flags=re.IGNORECASE,
+    )
+    return {key: " ".join(value.split()) for _, _, key, value in pairs}
+
+
+def test_evidence_sits_between_production_and_author(page: Page) -> None:
+    ids = [element.attrs.get("id") for element in page.elements]
+    for ident in ("production", "evidence", "author"):
+        assert ident in ids, f"缺少 #{ident}"
+    assert ids.index("production") < ids.index("evidence") < ids.index("author")
+
+
+def test_evidence_is_collapsed_by_default(page: Page) -> None:
+    details = [element for element in page.find("details") if "evidence" in element.scopes]
+    assert len(details) == 1, "证据区应使用一个原生 details"
+    assert "open" not in details[0].attrs, "证据区默认应收起"
+    assert details[0].attrs.get("data-evidence") == "backtest", "details 缺少测试钩子"
+
+    summaries = [
+        element for element in page.find("summary") if "evidence" in element.scopes
+    ]
+    assert len(summaries) == 1, "details 需要一个 summary"
+    summary_text = compact(page.text)
+    assert "查看回测证据" in summary_text, "summary 文案应说明展开内容"
+
+
+def test_evidence_has_two_sample_cards(page: Page) -> None:
+    cards = [
+        element
+        for element in page.find("article")
+        if "evidence" in element.scopes and element.attrs.get("id")
+    ]
+    ids = [element.attrs.get("id") for element in cards]
+    assert ids == ["evidence-flagship", "evidence-zz1000"], "应有两张样本卡片"
+
+
+def test_flagship_card_shows_config_and_metrics(page: Page) -> None:
+    text = compact(page.text_of("evidence-flagship"))
+    assert "旗舰10万样本" in text
+    for key, expected in FLAGSHIP_DISPLAY.items():
+        assert compact(expected) in text, f"旗舰卡片缺少 {key} 的展示值 {expected}"
+    for field in ("区间", "基准", "调仓", "初始资金", "总收益", "超额", "最大回撤", "夏普"):
+        assert field in text, f"旗舰卡片缺少字段 {field}"
+    assert "950笔" in text and "1笔" in text, "旗舰卡片应展示成交与拒单笔数"
+    assert "占初始资金" in text, "成本应注明口径"
+
+
+def test_zz1000_card_marks_experiment_not_flagship(page: Page) -> None:
+    text = compact(page.text_of("evidence-zz1000"))
+    assert "中证1000指数增强月度样本" in text
+    for key, expected in ZZ1000_DISPLAY.items():
+        assert compact(expected) in text, f"指增卡片缺少 {key} 的展示值 {expected}"
+    assert ZZ1000_NOTE in text, "指增样本必须标注多次实验之一"
+    assert "旗舰策略" in text, "指增标注应说明不是旗舰策略"
+
+
+def test_both_cards_carry_the_disclaimer(page: Page) -> None:
+    for ident in ("evidence-flagship", "evidence-zz1000"):
+        assert DISCLAIMER in compact(page.text_of(ident)), f"#{ident} 缺少免责声明"
+
+
+def test_every_data_metric_matches_metrics_json(page: Page) -> None:
+    metrics = load_metrics()
+    flat = flatten_metrics(metrics)
+    values = metric_values(HOME.read_text(encoding="utf-8"))
+
+    assert values, "页面没有 data-metric 标注"
+    missing = sorted(set(values) - set(flat))
+    assert not missing, f"页面标注了 metrics 未提供的键：{missing}"
+    for key, text in values.items():
+        assert text == format_metric(key, flat[key]), f"{key} 的页面文本与 metrics 不一致"
+
+
+def test_evidence_metric_text_carries_locked_values(page: Page) -> None:
+    values = metric_values(HOME.read_text(encoding="utf-8"))
+
+    expected = {**FLAGSHIP_DISPLAY, **ZZ1000_DISPLAY}
+    for key, display in expected.items():
+        assert values.get(key) == display, f"{key} 的展示值应为 {display}"
+
+
+def test_factor_counts_are_metric_driven(page: Page) -> None:
+    metrics = load_metrics()
+    registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    factors = registry["factors"]
+    counts = {
+        "total": len(factors),
+        "seed": sum(1 for factor in factors if factor["lineage"]["op"] == "seed"),
+        "mutation": sum(1 for factor in factors if factor["lineage"]["op"] == "mutation"),
+        "crossover": sum(1 for factor in factors if factor["lineage"]["op"] == "crossover"),
+    }
+
+    assert metrics["factors"] == counts, "metrics 因子计数与 registry 不一致"
+    values = metric_values(HOME.read_text(encoding="utf-8"))
+    for key, expected in counts.items():
+        assert values.get(f"factors.{key}") == str(expected)
+
+
+def test_metrics_samples_keep_backtest_values() -> None:
+    metrics = load_metrics()
+    flagship = metrics["samples"]["flagship"]
+    zz1000 = metrics["samples"]["zz1000"]
+
+    assert flagship["total_return"] == pytest.approx(0.136633, abs=1e-6)
+    assert flagship["excess_return"] == pytest.approx(0.000376, abs=1e-6)
+    assert flagship["max_drawdown"] == pytest.approx(-0.235810, abs=1e-6)
+    assert flagship["sharpe"] == pytest.approx(0.4138, abs=1e-4)
+    assert flagship["cost_ratio"] == pytest.approx(0.100159, abs=1e-6)
+    assert (flagship["trades"], flagship["rejects"]) == (950, 1)
+    assert zz1000["total_return"] == pytest.approx(0.339833, abs=1e-6)
+    assert zz1000["excess_return"] == pytest.approx(0.064841, abs=1e-6)
+    assert zz1000["max_drawdown"] == pytest.approx(-0.123360, abs=1e-6)
+    assert zz1000["sharpe"] == pytest.approx(1.1116, abs=1e-4)
+
+
+def test_evidence_uses_local_nav_svgs(page: Page) -> None:
+    images = [
+        element for element in page.find("img") if "evidence" in element.scopes
+    ]
+    assert len(images) == 2, "两张卡片各需要一张净值图"
+    assert [image.attrs.get("src") for image in images] == [
+        "assets/nav-flagship.svg",
+        "assets/nav-zz1000.svg",
+    ]
+    for image in images:
+        assert image.attrs.get("alt", "").strip(), "净值图缺少 alt"
+
+
+def test_evidence_cards_stack_on_narrow_screens() -> None:
+    css = SITE_CSS.read_text(encoding="utf-8")
+    selector = ".evidence__grid"
+    assert selector in css, "样式缺少证据卡片布局"
+
+    bodies: list[str] = []
+    for match in re.finditer(re.escape(selector), css):
+        brace = css.find("{", match.end())
+        if brace != -1:
+            bodies.append(_css_block(css, brace))
+    assert any("repeat(2, minmax(0, 1fr))" in body for body in bodies), "桌面应两栏"
+
+    stacked = [
+        body
+        for condition, body in _media_blocks(css)
+        if re.search(r"max-width:\s*768px", condition)
+        and selector in body
+        and "minmax(0, 1fr)" in body
+    ]
+    assert stacked, "768 以下证据卡片应单列"

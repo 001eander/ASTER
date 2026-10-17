@@ -1,0 +1,46 @@
+{
+  "factors": {
+    "crossover": 3,
+    "mutation": 10,
+    "seed": 13,
+    "total": 26
+  },
+  "samples": {
+    "flagship": {
+      "benchmark": "000300",
+      "cost_ratio": 0.100159,
+      "disclaimer": "历史回测，非实盘，不构成投资建议",
+      "end": "2026-09-28",
+      "excess_return": 0.000376,
+      "initial_cash": 100000.0,
+      "label": "旗舰 10 万样本",
+      "max_drawdown": -0.23581,
+      "nav_svg": "nav-flagship.svg",
+      "rebalance": "W",
+      "rejects": 1,
+      "sharpe": 0.413826,
+      "start": "2025-01-02",
+      "strategy": "stock_selection",
+      "total_return": 0.136633,
+      "trades": 950
+    },
+    "zz1000": {
+      "benchmark": "000852",
+      "disclaimer": "历史回测，非实盘，不构成投资建议",
+      "end": "2026-09-28",
+      "excess_return": 0.064841,
+      "initial_cash": 1000000.0,
+      "label": "中证 1000 指数增强月度样本",
+      "max_drawdown": -0.12336,
+      "nav_svg": "nav-zz1000.svg",
+      "note": "多次实验中的一个配置，不是旗舰策略",
+      "rebalance": "M",
+      "rejects": 31,
+      "sharpe": 1.111628,
+      "start": "2025-01-02",
+      "strategy": "index_enhanced",
+      "total_return": 0.339833,
+      "trades": 1517
+    }
+  }
+}
