@@ -173,28 +173,28 @@
     <section class="section" id="factor-library" aria-labelledby="factor-library-title">
       <div class="shell">
         <p class="kicker">因子库与门控</p>
-        <h2 class="section__title" id="factor-library-title">26 个因子工件，四层防御守着入口</h2>
+        <h2 class="section__title" id="factor-library-title"><span data-metric="factors.total">26</span> 个因子工件，四层防御守着入口</h2>
         <p class="section__lede">因子库是研究层与生产层之间唯一的交接物。每一次入库都要过门控，入库之后还要定期整库，把高相关的因子挡在外面，让 pool 保持在一个可解释的规模。</p>
 
         <dl class="factor-counts">
           <div>
             <dt>因子工件</dt>
-            <dd><span class="factor-counts__number">26</span></dd>
+            <dd><span class="factor-counts__number" data-metric="factors.total">26</span></dd>
           </div>
           <div>
             <dt>种子</dt>
-            <dd><span class="factor-counts__number">13</span></dd>
+            <dd><span class="factor-counts__number" data-metric="factors.seed">13</span></dd>
           </div>
           <div>
             <dt>变异</dt>
-            <dd><span class="factor-counts__number">10</span></dd>
+            <dd><span class="factor-counts__number" data-metric="factors.mutation">10</span></dd>
           </div>
           <div>
             <dt>交叉</dt>
-            <dd><span class="factor-counts__number">3</span></dd>
+            <dd><span class="factor-counts__number" data-metric="factors.crossover">3</span></dd>
           </div>
         </dl>
-        <p class="factor-counts__note">26 个因子工件 = 13 个种子 + 10 个变异 + 3 个交叉。13 个种子是第 0 代，13 个挖掘因子是第 1 代，全部来自 run <code>flagship-mining</code>，当前 26 条都在 pool。</p>
+        <p class="factor-counts__note"><span data-metric="factors.total">26</span> 个因子工件 = <span data-metric="factors.seed">13</span> 个种子 + <span data-metric="factors.mutation">10</span> 个变异 + <span data-metric="factors.crossover">3</span> 个交叉。13 个种子是第 0 代，13 个挖掘因子是第 1 代，全部来自 run <code>flagship-mining</code>，当前 26 条都在 pool。</p>
 
         <h3 class="subhead">四层共线性防御</h3>
         <ol class="steps">
@@ -432,6 +432,134 @@
             </li>
           </ol>
         </div>
+      </div>
+    </section>
+
+    <section class="section" id="evidence" aria-labelledby="evidence-title">
+      <div class="shell">
+        <p class="kicker">回测证据</p>
+        <h2 class="section__title" id="evidence-title">两个样本，配置和指标一起看</h2>
+        <p class="section__lede">下面两个样本都跑在同一段区间上，但策略、基准、调仓频率与初始资金不同，指标不能横向比较。展开可以看净值曲线；成交、拒单与费用只来自历史回测。</p>
+
+        <details class="evidence" data-evidence="backtest">
+          <summary class="evidence__summary">查看回测证据</summary>
+
+          <div class="evidence__grid">
+            <article class="evidence__card" id="evidence-flagship" aria-labelledby="evidence-flagship-title">
+              <p class="evidence__tag">旗舰样本 · <span data-metric="flagship.strategy">stock_selection</span></p>
+              <h3 class="evidence__title" id="evidence-flagship-title">旗舰 <span data-metric="flagship.initial_cash">10 万</span>样本</h3>
+              <p class="evidence__note">全市场选股，周频调仓，组合相对沪深 300 做超额。样本包含 2025 年初的空仓建仓段，净值曲线照实保留。</p>
+
+              <dl class="evidence__config">
+                <div>
+                  <dt>区间</dt>
+                  <dd><span class="mono" data-metric="flagship.start">2025-01-02</span> 至 <span class="mono" data-metric="flagship.end">2026-09-28</span></dd>
+                </div>
+                <div>
+                  <dt>基准</dt>
+                  <dd><span class="mono" data-metric="flagship.benchmark">000300</span> 沪深 300</dd>
+                </div>
+                <div>
+                  <dt>调仓</dt>
+                  <dd data-metric="flagship.rebalance">周频</dd>
+                </div>
+                <div>
+                  <dt>初始资金</dt>
+                  <dd data-metric="flagship.initial_cash">10 万</dd>
+                </div>
+              </dl>
+
+              <dl class="evidence__metrics">
+                <div>
+                  <dt>总收益</dt>
+                  <dd><span class="mono" data-metric="flagship.total_return">13.66%</span></dd>
+                </div>
+                <div>
+                  <dt>超额收益</dt>
+                  <dd><span class="mono" data-metric="flagship.excess_return">0.04%</span></dd>
+                </div>
+                <div>
+                  <dt>最大回撤</dt>
+                  <dd><span class="mono" data-metric="flagship.max_drawdown">-23.58%</span></dd>
+                </div>
+                <div>
+                  <dt>夏普</dt>
+                  <dd><span class="mono" data-metric="flagship.sharpe">0.41</span></dd>
+                </div>
+                <div>
+                  <dt>成交</dt>
+                  <dd><span class="mono" data-metric="flagship.trades">950</span> 笔</dd>
+                </div>
+                <div>
+                  <dt>拒单</dt>
+                  <dd><span class="mono" data-metric="flagship.rejects">1</span> 笔</dd>
+                </div>
+                <div>
+                  <dt>成本</dt>
+                  <dd><span class="mono" data-metric="flagship.cost_ratio">10.0%</span> 占初始资金</dd>
+                </div>
+              </dl>
+
+              <figure class="evidence__figure">
+                <img src="assets/nav-flagship.svg" alt="旗舰 10 万样本的组合归一净值与沪深 300 基准归一净值对比，2025-01-02 至 2026-09-28。" width="720" height="260" decoding="async">
+                <figcaption>紫线为组合归一净值，灰线为 000300 基准归一净值，两者以期初交易日归一为 1.0；虚线为 1.0 基准线。</figcaption>
+              </figure>
+
+              <p class="evidence__disclaimer"><span data-metric="flagship.disclaimer">历史回测，非实盘，不构成投资建议</span></p>
+            </article>
+
+            <article class="evidence__card" id="evidence-zz1000" aria-labelledby="evidence-zz1000-title">
+              <p class="evidence__tag">实验配置 · <span data-metric="zz1000.strategy">index_enhanced</span></p>
+              <h3 class="evidence__title" id="evidence-zz1000-title">中证 1000 指数增强月度样本</h3>
+              <p class="evidence__note"><span data-metric="zz1000.note">多次实验中的一个配置，不是旗舰策略</span>。月频调仓，组合相对中证 1000 做指数增强，用于检验约束族与放松阶梯在真实基准上的表现。</p>
+
+              <dl class="evidence__config">
+                <div>
+                  <dt>区间</dt>
+                  <dd><span class="mono" data-metric="zz1000.start">2025-01-02</span> 至 <span class="mono" data-metric="zz1000.end">2026-09-28</span></dd>
+                </div>
+                <div>
+                  <dt>基准</dt>
+                  <dd><span class="mono" data-metric="zz1000.benchmark">000852</span> 中证 1000</dd>
+                </div>
+                <div>
+                  <dt>调仓</dt>
+                  <dd data-metric="zz1000.rebalance">月频</dd>
+                </div>
+                <div>
+                  <dt>初始资金</dt>
+                  <dd data-metric="zz1000.initial_cash">100 万</dd>
+                </div>
+              </dl>
+
+              <dl class="evidence__metrics">
+                <div>
+                  <dt>总收益</dt>
+                  <dd><span class="mono" data-metric="zz1000.total_return">33.98%</span></dd>
+                </div>
+                <div>
+                  <dt>超额收益</dt>
+                  <dd><span class="mono" data-metric="zz1000.excess_return">6.48%</span></dd>
+                </div>
+                <div>
+                  <dt>最大回撤</dt>
+                  <dd><span class="mono" data-metric="zz1000.max_drawdown">-12.34%</span></dd>
+                </div>
+                <div>
+                  <dt>夏普</dt>
+                  <dd><span class="mono" data-metric="zz1000.sharpe">1.11</span></dd>
+                </div>
+              </dl>
+
+              <figure class="evidence__figure">
+                <img src="assets/nav-zz1000.svg" alt="中证 1000 指数增强月度样本的组合归一净值与中证 1000 基准归一净值对比，2025-01-02 至 2026-09-28。" width="720" height="260" decoding="async">
+                <figcaption>紫线为组合归一净值，灰线为 000852 基准归一净值，两者以期初交易日归一为 1.0；虚线为 1.0 基准线。</figcaption>
+              </figure>
+
+              <p class="evidence__disclaimer"><span data-metric="zz1000.disclaimer">历史回测，非实盘，不构成投资建议</span></p>
+            </article>
+          </div>
+        </details>
       </div>
     </section>
 
