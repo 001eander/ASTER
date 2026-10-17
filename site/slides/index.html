@@ -336,14 +336,59 @@
     </section>
 
 
-    <!-- #160 填充：第 8 页 AutoML 与 AutoResearch -->
+    <!-- #160：第 8 页 AutoML 与 AutoResearch -->
     <section class="slide" id="slide-8" data-slide="8" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-8-title">
       <header class="slide__header">
         <p class="slide__kicker">第 4 部分 / 项目</p>
-        <h2 class="slide__title" id="slide-8-title">待补充</h2>
+        <h2 class="slide__title" id="slide-8-title">AutoML 与 AutoResearch</h2>
       </header>
-      <div class="slide__body">
-        <p class="slide__pending">本页内容待补充，由后续票据填充。</p>
+      <div class="slide__body slide__body--tight">
+        <p class="lede">模型层把因子工件压成截面信号：AutoML 已经跑通训练到信号的全链，AutoResearch 仍是 M5 路线图。</p>
+
+        <div class="columns">
+          <section class="block block--status" id="slide-8-automl" aria-labelledby="slide-8-automl-title">
+            <div class="block__head">
+              <h3 class="block__title" id="slide-8-automl-title">AutoML</h3>
+              <span class="status status--live">已实现</span>
+            </div>
+            <ol class="chain">
+              <li>
+                <span class="chain__label">数据集工件</span>
+                <span class="chain__note">宽表 (date, instrument, 特征, label, delay_days)，特征直接用因子工件 value。</span>
+              </li>
+              <li>
+                <span class="chain__label">AutoGluon</span>
+                <span class="chain__note">Tabular + 本机 GPU，presets medium_quality；旗舰 1800 秒 / 19.9 万行。</span>
+              </li>
+              <li>
+                <span class="chain__label">walk-forward</span>
+                <span class="chain__note">AutoGluon 只训单窗口，切分与拼接在 Python 侧完成。</span>
+              </li>
+              <li>
+                <span class="chain__label">模型注册表</span>
+                <span class="chain__note">每 20 个交易日重训，500 日窗口、60 日预热；按「最新且未过期」选版。</span>
+              </li>
+              <li>
+                <span class="chain__label">信号工件</span>
+                <span class="chain__note">(date, instrument, score)，组合层与回测只读信号，不直接调模型。</span>
+              </li>
+            </ol>
+          </section>
+
+          <section class="block block--status" id="slide-8-autoresearch" aria-labelledby="slide-8-autoresearch-title">
+            <div class="block__head">
+              <h3 class="block__title" id="slide-8-autoresearch-title">AutoResearch</h3>
+              <span class="status status--planned">规划中</span>
+            </div>
+            <p class="block__text">M5 远期路线：复用 Agent 内循环，Proposal 改训练配置或模型结构代码，eval 以 walk-forward 样本外 IC 打分。</p>
+            <ul class="list list--tight">
+              <li><strong>Agent 调参</strong>：在搜索空间里改写训练配置，按样本外 IC 接受或拒绝。</li>
+              <li><strong>网络结构演化</strong>：让 Agent 改模型结构代码，与调参协同演化，参照 RD-Agent。</li>
+              <li><strong>前置依赖</strong>：M4 的滚动重训与注册表跑稳后才启动，当前不进入生产链。</li>
+            </ul>
+            <p class="note">尚无可引用的实验结论；这一栏按路线图表述，不代表已有能力。</p>
+          </section>
+        </div>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">08 / 11</span>
@@ -351,14 +396,66 @@
       </footer>
     </section>
 
-    <!-- #160 填充：第 9 页 组合优化与生产闭环 -->
+    <!-- #160：第 9 页 组合优化与生产闭环 -->
     <section class="slide" id="slide-9" data-slide="9" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-9-title">
       <header class="slide__header">
         <p class="slide__kicker">第 4 部分 / 项目</p>
-        <h2 class="slide__title" id="slide-9-title">待补充</h2>
+        <h2 class="slide__title" id="slide-9-title">组合优化与生产闭环</h2>
       </header>
-      <div class="slide__body">
-        <p class="slide__pending">本页内容待补充，由后续票据填充。</p>
+      <div class="slide__body slide__body--tight">
+        <div class="grid grid--2x2 optim">
+          <section class="block block--tight" aria-labelledby="slide-9-constraints">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-9-constraints">约束族</h3>
+            <p class="block__text">满仓、禁卖空；个股带成分 ±0.005、非成分 ≤0.005；行业、市值与六风格偏离各 ±0.005×std；覆盖度 ≥ 0.5；换手 Σ|w−w_prev| ≤ 0.2。目标 min −αᵀw + λwᵀΣw，λ=1，Ledoit-Wolf 协方差。</p>
+          </section>
+
+          <section class="block block--tight" aria-labelledby="slide-9-relax">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-9-relax">放松阶梯</h3>
+            <p class="block__text">Minimize(0) 预检；不可行按风格 → 行业/市值 → 换手循环，每 3 轮一次、最多 60 轮；用尽后终局把换手上限放到 2.0，仍不可行才 STATUS_HELD 保持持仓。</p>
+          </section>
+
+          <section class="block block--tight" aria-labelledby="slide-9-frozen">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-9-frozen">冻结持仓</h3>
+            <p class="block__text">调仓日目标票停牌或触涨跌停时，订单递延到可成交日；既有仓位维持，损益照常计入；ST 不特殊处理。</p>
+          </section>
+
+          <section class="block block--tight" aria-labelledby="slide-9-lots">
+            <p class="block__index mono">04</p>
+            <h3 class="block__title" id="slide-9-lots">整手可行化</h3>
+            <p class="block__text">权重 × nav 后按板块向下取整：主板与创业板 100 股倍数，科创板 200 股、北交所 100 股起按 1 股递增；卖出允许零股出清。</p>
+          </section>
+        </div>
+
+        <ol class="flow" id="slide-9-flow" aria-label="生产闭环五步">
+          <li>
+            <span class="flow__index mono">01</span>
+            <span class="flow__label">数据增量</span>
+            <span class="flow__note">体检不过即中止</span>
+          </li>
+          <li>
+            <span class="flow__index mono">02</span>
+            <span class="flow__label">因子重算</span>
+            <span class="flow__note">只算 pool 条目</span>
+          </li>
+          <li>
+            <span class="flow__index mono">03</span>
+            <span class="flow__label">信号合成</span>
+            <span class="flow__note">AutoML 截面打分</span>
+          </li>
+          <li>
+            <span class="flow__index mono">04</span>
+            <span class="flow__label">组合优化</span>
+            <span class="flow__note">cvxpy 求解</span>
+          </li>
+          <li>
+            <span class="flow__index mono">05</span>
+            <span class="flow__label">T+1 调仓单</span>
+            <span class="flow__note">人工跟单</span>
+          </li>
+        </ol>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">09 / 11</span>
@@ -366,14 +463,46 @@
       </footer>
     </section>
 
-    <!-- #160 填充：第 10 页 创新点与边界 -->
+    <!-- #160：第 10 页 创新点与边界 -->
     <section class="slide" id="slide-10" data-slide="10" data-part="4" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-10-title">
       <header class="slide__header">
         <p class="slide__kicker">第 4 部分 / 项目</p>
-        <h2 class="slide__title" id="slide-10-title">待补充</h2>
+        <h2 class="slide__title" id="slide-10-title">创新点与边界</h2>
       </header>
-      <div class="slide__body">
-        <p class="slide__pending">本页内容待补充，由后续票据填充。</p>
+      <div class="slide__body slide__body--tight">
+        <p class="lede">三条创新点回答「凭什么可信」，已知局限回答「结论能推到多远」。</p>
+
+        <div class="grid grid--3">
+          <section class="block" aria-labelledby="slide-10-audit">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-10-audit">可审计</h3>
+            <p class="block__text">因子入库带指标与血统链，registry.json 是唯一真源，lineage 能追到 run 与代数；课题的 trace 记录每轮假设与评分。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-10-lookahead">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-10-lookahead">防前视</h3>
+            <p class="block__text">截断重算检测比对抽检日的重算结果；信号、成交、标签共用 open-to-open 口径：T 日收盘出信号，T+1 开盘成交，标签从 T+1 开盘算起。</p>
+          </section>
+
+          <section class="block" aria-labelledby="slide-10-fidelity">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-10-fidelity">执行真实度</h3>
+            <p class="block__text">账户模拟器兼任生产虚拟账户：T+1、分板块涨跌停、整手、停牌、佣金印花税滑点、分红送转都走同一套规则，回测指标与调仓单同源。</p>
+          </section>
+        </div>
+
+        <section class="limits" aria-labelledby="slide-10-limits">
+          <h3 class="block__title" id="slide-10-limits">已知局限</h3>
+          <ul class="limits__list">
+            <li>幸存者偏差：akshare 对退市股覆盖不全，历史股票池偏乐观。</li>
+            <li>接口变动：数据源可能改字段或限流，锁版本并做校验熔断。</li>
+            <li>样本外段约 180 天，统计功效有限，不足以证明长期稳定。</li>
+            <li>因子入选用全样本行情，存在选择泄漏边界，数字需要打折。</li>
+            <li>指增是多次实验中的一个配置，不是唯一策略。</li>
+            <li>历史回测，非实盘，不构成投资建议。</li>
+          </ul>
+        </section>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">10 / 11</span>
@@ -381,14 +510,46 @@
       </footer>
     </section>
 
-    <!-- #160 填充：第 11 页 未来规划 -->
+    <!-- #160：第 11 页 未来规划 -->
     <section class="slide" id="slide-11" data-slide="11" data-part="5" role="group" aria-roledescription="幻灯片" aria-labelledby="slide-11-title">
       <header class="slide__header">
         <p class="slide__kicker">第 5 部分 / 未来规划</p>
-        <h2 class="slide__title" id="slide-11-title">待补充</h2>
+        <h2 class="slide__title" id="slide-11-title">未来规划</h2>
       </header>
       <div class="slide__body">
-        <p class="slide__pending">本页内容待补充，由后续票据填充。</p>
+        <div class="grid grid--3 plan">
+          <section class="block" aria-labelledby="slide-11-short">
+            <p class="block__index mono">01</p>
+            <h3 class="block__title" id="slide-11-short">短期</h3>
+            <ul class="list list--tight">
+              <li>因子评估 v2 落地：六道门控、参考池快照、排序键交回课题层。</li>
+              <li>课题体系接线：topics/&lt;id&gt;.md 作为真源，状态机与调度器对齐。</li>
+              <li>整库与容量规则复算：聚簇阈值、pool 上限与删除策略重新标定。</li>
+            </ul>
+          </section>
+
+          <section class="block" aria-labelledby="slide-11-long">
+            <p class="block__index mono">02</p>
+            <h3 class="block__title" id="slide-11-long">长期</h3>
+            <ul class="list list--tight">
+              <li>AutoResearch M5：Agent 调参与网络结构演化，按样本外 IC 打分。</li>
+              <li>Barra PnL 相似门（#140）：把风格暴露的 PnL 相关性纳入门控。</li>
+              <li>DRO 目标与 IM 对冲（#73 / #72）：从 backlog 进入实验。</li>
+            </ul>
+          </section>
+
+          <section class="block" aria-labelledby="slide-11-view">
+            <p class="block__index mono">03</p>
+            <h3 class="block__title" id="slide-11-view">领域认知</h3>
+            <ul class="list list--tight">
+              <li>alpha 衰减快，任何因子都要按样本外重新定价。</li>
+              <li>换手与费用是硬约束，先看成本再看收益。</li>
+              <li>样本外纪律优先于 IC 排名；系统价值在可复现流水线与可执行调仓单。</li>
+            </ul>
+          </section>
+        </div>
+
+        <p class="strip">下一步不追因子数量，先把评估、课题与容量三条规则钉死。</p>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">11 / 11</span>

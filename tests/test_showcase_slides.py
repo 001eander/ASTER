@@ -1,8 +1,10 @@
-"""幻灯片 deck（#158 / #159）的静态验收。
+"""幻灯片 deck（#158 / #159 / #160）的静态验收。
 
 覆盖 11 页骨架与页码、五部分顺序、封面与前三页内容、第 4 到第 7 页的
 项目部分（问题/目标/三层、三层与因子库接口、Agent 六术语闭环、
-26/13/10/3 与四层共线性防御、血统链）、默认与无 JS 状态、打印钩子、
+26/13/10/3 与四层共线性防御、血统链）、第 8 到第 11 页（AutoML 已实现
+与 AutoResearch 规划中的并列、组合优化四要点与五步闭环、三条创新点与
+已知局限、短期与长期与领域认知）、默认与无 JS 状态、打印钩子、
 本地资源边界，以及纯路由模块的存在与引用。
 深链接与翻页边界的行为由 `src/slides-route.test.ts` 覆盖。
 """
@@ -32,8 +34,17 @@ PAGE_COUNT = 11
 PARTS = ("1", "2", "3") + ("4",) * 7 + ("5",)
 CAPTURED_TAGS = {"h1", "h2", "h3", "figcaption"}
 PROJECT_SLIDES = {4: "项目总览", 5: "系统架构", 6: "Agent 因子挖掘", 7: "因子库与门控"}
+LATER_SLIDES = {
+    8: ("AutoML 与 AutoResearch", "4"),
+    9: ("组合优化与生产闭环", "4"),
+    10: ("创新点与边界", "4"),
+    11: ("未来规划", "5"),
+}
 LOOP_TERMS = ("课题", "灵感", "轮", "trace", "沙盒", "门控")
 DEFENSE_LAYERS = ("源头分流", "生成避让", "评分折扣", "入库与整库")
+OPTIMIZER_POINTS = ("约束族", "放松阶梯", "冻结持仓", "整手可行化")
+PIPELINE_STEPS = ("数据增量", "因子重算", "信号合成", "组合优化", "T+1 调仓单")
+INNOVATIONS = ("可审计", "防前视", "执行真实度")
 
 VOID = {
     "area",
@@ -259,13 +270,97 @@ def test_ai_learning_slide_covers_preparation(page: Page) -> None:
         assert item in slide, f"第 3 页缺少 {item}"
 
 
-def test_placeholder_slides_stay_skeleton(page: Page) -> None:
-    for number in range(8, PAGE_COUNT + 1):
+def test_later_slides_replace_placeholders(page: Page) -> None:
+    assert "待补充" not in page.text, "deck 不应再有占位页"
+    for number, (title, part) in LATER_SLIDES.items():
         element = page.slide(number)
         text = compact(page.text_of(element.attrs["id"]))
-        assert "待补充" in text, f"第 {number} 页应保留待补充占位"
-        for premature in ("已实现", "规划中", "AutoResearch", "26个因子工件"):
-            assert premature not in text, f"第 {number} 页提前写入后续票据内容：{premature}"
+        assert element.attrs.get("data-part") == part
+        assert element.attrs.get("aria-labelledby") == f"slide-{number}-title"
+        titles = [compact(value) for value in page.captured("h2", number)]
+        assert titles == [compact(title)], f"第 {number} 页 h2 应为 {title}"
+
+
+def test_automl_and_autoresearch_are_parallel_with_status(page: Page) -> None:
+    automl = compact(page.text_of("slide-8-automl"))
+    research = compact(page.text_of("slide-8-autoresearch"))
+    for item in ("AutoML", "已实现"):
+        assert item in automl, f"AutoML 栏缺少 {item}"
+    assert "规划中" not in automl, "AutoML 栏不应出现规划中"
+    for item in ("AutoResearch", "规划中"):
+        assert item in research, f"AutoResearch 栏缺少 {item}"
+    assert "已实现" not in research, "AutoResearch 不得写成已实现"
+    for claim in ("已上线", "已完成", "线上结果"):
+        assert claim not in research, f"AutoResearch 不应宣称 {claim}"
+
+    assert [compact(value) for value in page.captured("h3", 8)] == ["AutoML", "AutoResearch"]
+    text = compact(page.text_of("slide-8"))
+    assert text.index("AutoML") < text.index("AutoResearch"), "两栏应按已实现到规划中排列"
+
+    for item in ("数据集工件", "AutoGluon", "walk-forward", "模型注册表", "信号工件"):
+        assert compact(item) in automl, f"AutoML 栏缺少 {item}"
+    for item in ("M5", "Agent 调参", "网络结构演化", "样本外 IC"):
+        assert compact(item) in research, f"AutoResearch 栏缺少 {item}"
+
+
+def test_optimizer_slide_covers_four_points(page: Page) -> None:
+    headings = [compact(value) for value in page.captured("h3", 9)]
+    assert headings[: len(OPTIMIZER_POINTS)] == [compact(value) for value in OPTIMIZER_POINTS]
+    text = compact(page.text_of("slide-9"))
+    for item in (
+        "cvxpy",
+        "个股带",
+        "行业",
+        "市值",
+        "风格",
+        "覆盖度",
+        "换手",
+        "2.0",
+        "保持持仓",
+        "整手",
+        "停牌",
+        "涨跌停",
+    ):
+        assert compact(item) in text, f"第 9 页缺少 {item}"
+
+
+def test_optimizer_slide_orders_pipeline_steps(page: Page) -> None:
+    flow = compact(page.text_of("slide-9-flow"))
+    positions = [flow.index(compact(step)) for step in PIPELINE_STEPS]
+    assert positions == sorted(positions), "生产闭环五步顺序不对"
+    assert "人工跟单" in flow
+    items = [element for element in page.find("li") if "slide-9-flow" in element.scopes]
+    assert len(items) == len(PIPELINE_STEPS), "流程条应为五步"
+
+
+def test_innovation_slide_pairs_claims_with_limits(page: Page) -> None:
+    headings = [compact(value) for value in page.captured("h3", 10)]
+    assert headings[:3] == [compact(value) for value in INNOVATIONS]
+    text = compact(page.text_of("slide-10"))
+    for item in ("血统链", "registry.json", "截断重算", "open-to-open", "账户模拟器", "分红送转"):
+        assert compact(item) in text, f"第 10 页创新点缺少 {item}"
+    assert "已知局限" in text
+    for item in ("幸存者偏差", "接口变动", "180天", "泄漏", "多次实验", "非实盘"):
+        assert compact(item) in text, f"第 10 页局限缺少 {item}"
+
+
+def test_planning_slide_has_three_blocks(page: Page) -> None:
+    headings = [compact(value) for value in page.captured("h3", 11)]
+    assert headings == ["短期", "长期", "领域认知"]
+    text = compact(page.text_of("slide-11"))
+    for item in (
+        "因子评估v2",
+        "课题体系",
+        "整库与容量",
+        "AutoResearchM5",
+        "BarraPnL相似门",
+        "DRO",
+        "IM对冲",
+        "alpha衰减",
+        "换手与费用",
+        "样本外纪律",
+    ):
+        assert compact(item) in text, f"第 11 页缺少 {item}"
 
 
 def test_project_slides_replace_placeholders(page: Page) -> None:
