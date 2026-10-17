@@ -57,6 +57,8 @@ LAYER_TERMS = ("数据层", "研究层", "生产层")
 AGENT_TERMS = ("课题", "灵感", "轮", "trace", "沙盒", "门控")
 DEFENSE_TERMS = ("源头分流", "生成避让", "评分折扣", "入库门控")
 AUTOML_CONCEPTS = ("数据集工件", "AutoGluon", "walk-forward", "模型注册表", "信号工件")
+PORTFOLIO_POINTS = ("约束族", "放松阶梯", "冻结持仓", "整手")
+PRODUCTION_FLOW = ("数据增量", "因子重算", "信号合成", "组合优化", "T+1调仓单")
 
 
 def compact(text: str) -> str:
@@ -556,3 +558,159 @@ def test_pages_workflow_publishes_site() -> None:
     assert "pages: write" in workflow
     assert "id-token: write" in workflow
     assert "concurrency" in workflow
+
+
+def _css_block(source: str, start: int) -> str:
+    """从 start 处的左花括号开始，返回配平后的规则体。"""
+    assert source[start] == "{", "CSS 规则起始位置错误"
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start + 1 : index]
+    raise AssertionError("CSS 花括号未配平")
+
+
+def _media_blocks(source: str) -> list[tuple[str, str]]:
+    """返回全部 @media 块的条件与规则体。"""
+    blocks: list[tuple[str, str]] = []
+    for match in re.finditer(r"@media[^{]*", source):
+        brace = source.find("{", match.end())
+        assert brace != -1, "@media 缺少规则体"
+        blocks.append((source[match.start() : brace], _css_block(source, brace)))
+    return blocks
+
+
+def test_home_orders_portfolio_and_production_between_automl_and_author(page: Page) -> None:
+    ids = [element.attrs.get("id") for element in page.elements]
+    for ident in ("automl", "portfolio", "production", "author"):
+        assert ident in ids, f"缺少 #{ident}"
+    assert (
+        ids.index("automl")
+        < ids.index("portfolio")
+        < ids.index("production")
+        < ids.index("author")
+    ), "栏目顺序应为 AutoML、组合优化、生产闭环、作者"
+
+
+def test_portfolio_section_covers_four_points_in_order(page: Page) -> None:
+    text = compact(page.text_of("portfolio"))
+    assert len(text) >= 400, "#portfolio 内容过少"
+    positions = [text.find(term) for term in PORTFOLIO_POINTS]
+    for term, position in zip(PORTFOLIO_POINTS, positions):
+        assert position >= 0, f"组合优化段缺少 {term}"
+    assert positions == sorted(positions), "四个要点应按约束族、放松阶梯、冻结持仓、整手的顺序出现"
+
+
+def test_portfolio_constraints_are_parameterised_against_benchmark(page: Page) -> None:
+    text = compact(page.text_of("portfolio"))
+    for item in (
+        "满仓",
+        "禁卖空",
+        "bench_w±0.005",
+        "非成分≤0.005",
+        "行业偏离±0.5%",
+        "市值偏离±0.5%倍std",
+        "六风格",
+        "成分覆盖度≥0.5",
+        "Σ|w−w_prev|≤0.2",
+        "min−αᵀw+λwᵀΣw",
+        "Ledoit-Wolf",
+    ):
+        assert item in text, f"约束族缺少 {item}"
+
+
+def test_portfolio_relaxation_ladder_is_ordered_and_bounded(page: Page) -> None:
+    text = compact(page.text_of("portfolio-relax"))
+    assert text, "缺少放松阶梯条目"
+    for item in ("Minimize(0)", "每3轮", "0.001", "0.01", "最多60轮", "2.0", "保持持仓"):
+        assert item in text, f"放松阶梯缺少 {item}"
+    positions = [text.find(term) for term in ("风格", "行业/市值", "换手")]
+    for term, position in zip(("风格", "行业/市值", "换手"), positions):
+        assert position >= 0, f"放松阶梯缺少 {term}"
+    assert positions == sorted(positions), "放松顺序应为风格、行业与市值、换手"
+
+
+def test_portfolio_frozen_positions_explain_execution_delay(page: Page) -> None:
+    text = compact(page.text_of("portfolio"))
+    for item in ("停牌", "涨跌停", "递延", "可成交日", "既有仓位维持", "损益照常计入"):
+        assert item in text, f"冻结持仓说明缺少 {item}"
+    assert "ST不做任何特殊处理" in text, "应写明 ST 不特殊处理"
+
+
+def test_portfolio_lot_rules_cover_every_board(page: Page) -> None:
+    text = compact(page.text_of("portfolio"))
+    for item in ("主板", "创业板", "100股", "科创板", "200股", "北交所", "1股递增", "零股"):
+        assert item in text, f"整手说明缺少 {item}"
+
+
+def test_production_flow_lists_five_steps_in_order(page: Page) -> None:
+    assert page.has_id("production-flow"), "缺少 #production-flow 流程条"
+    text = compact(page.text_of("production-flow"))
+    positions = [text.find(step) for step in PRODUCTION_FLOW]
+    for step, position in zip(PRODUCTION_FLOW, positions):
+        assert position >= 0, f"流程条缺少 {step}"
+    assert positions == sorted(positions), "流程应为数据增量、因子重算、信号合成、组合优化、T+1 调仓单"
+
+
+def test_production_flow_runs_through_manual_following(page: Page) -> None:
+    text = compact(page.text_of("production"))
+    assert len(text) >= 300, "#production 内容过少"
+    for item in ("人工跟单", "回录成交", "简报", "T+1"):
+        assert item in text, f"生产闭环缺少 {item}"
+    assert "runs/orders" in text and "runs/reports" in text, "应写明产物落盘位置"
+
+
+def test_production_flow_declares_layout_hook(page: Page) -> None:
+    flows = [
+        element
+        for element in page.find("ol")
+        if element.attrs.get("id") == "production-flow"
+    ]
+    assert len(flows) == 1, "流程条应为单一一组有序步骤"
+    assert flows[0].attrs.get("data-flow") == "production", "流程条缺少可测试的布局钩子"
+    steps = [
+        element
+        for element in page.find("li")
+        if "production-flow" in element.scopes
+    ]
+    assert len(steps) == 5, "流程条应恰好有五步"
+
+
+def test_production_flow_stacks_on_phone_without_overflow() -> None:
+    css = SITE_CSS.read_text(encoding="utf-8")
+    selector = '[data-flow="production"]'
+    assert selector in css, "样式缺少流程条布局钩子"
+
+    bodies: list[str] = []
+    for match in re.finditer(re.escape(selector), css):
+        brace = css.find("{", match.end())
+        if brace != -1:
+            bodies.append(_css_block(css, brace))
+    assert bodies, "流程条样式没有规则体"
+    assert any("minmax(0, 1fr)" in body or "flex-wrap: wrap" in body for body in bodies), (
+        "流程条应可换行或自动分列"
+    )
+    assert not any("nowrap" in body for body in bodies), "流程条不应禁止换行"
+
+    def max_width(condition: str) -> int:
+        match = re.search(r"max-width:\s*(\d+)px", condition)
+        return int(match.group(1)) if match else 0
+
+    stacked = [
+        body
+        for condition, body in _media_blocks(css)
+        if max_width(condition) >= 390
+        and selector in body
+        and (
+            "grid-template-columns: minmax(0, 1fr)" in body
+            or "grid-template-columns:minmax(0,1fr)" in body
+            or "flex-direction: column" in body
+        )
+    ]
+    assert stacked, "390 宽度下流程条应纵向排列或换行"
+    for body in stacked:
+        assert "width:" not in body or "min-width: 0" in body, "窄屏规则不应写死宽度"
