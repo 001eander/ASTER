@@ -376,6 +376,14 @@ def test_factor_library_heatmap_is_local_with_alt_and_caption(page: Page) -> Non
     assert "相关" in compact(captions[0]), "图注应说明相关性"
 
 
+def test_factor_library_heatmap_falls_back_without_broken_image(page: Page) -> None:
+    images = [element for element in page.find("img") if "factor-library" in element.scopes]
+    assert images, "因子库段需要热图"
+    handler = images[0].attrs.get("onerror", "")
+    assert handler, "热图缺少加载失败兜底"
+    assert "hidden" in handler, "加载失败时应隐藏整个 figure，避免破图"
+
+
 def test_automl_and_autoresearch_are_parallel_columns(page: Page) -> None:
     columns = [element for element in page.find("section") if "automl" in element.scopes]
     assert len(columns) == 2, "AutoML 段应为左右两栏"
@@ -741,6 +749,7 @@ FLAGSHIP_DISPLAY = {
     "flagship.excess_return": "0.04%",
     "flagship.max_drawdown": "-23.58%",
     "flagship.sharpe": "0.41",
+    "flagship.turnover": "38.71",
     "flagship.trades": "950",
     "flagship.rejects": "1",
     "flagship.cost_ratio": "10.0%",
@@ -813,8 +822,19 @@ def test_flagship_card_shows_config_and_metrics(page: Page) -> None:
     assert "旗舰10万样本" in text
     for key, expected in FLAGSHIP_DISPLAY.items():
         assert compact(expected) in text, f"旗舰卡片缺少 {key} 的展示值 {expected}"
-    for field in ("区间", "基准", "调仓", "初始资金", "总收益", "超额", "最大回撤", "夏普"):
+    for field in (
+        "区间",
+        "基准",
+        "调仓",
+        "初始资金",
+        "总收益",
+        "超额",
+        "最大回撤",
+        "夏普",
+        "总换手",
+    ):
         assert field in text, f"旗舰卡片缺少字段 {field}"
+    assert "38.71" in text, "旗舰卡片应展示总换手"
     assert "950笔" in text and "1笔" in text, "旗舰卡片应展示成交与拒单笔数"
     assert "占初始资金" in text, "成本应注明口径"
 
@@ -880,6 +900,8 @@ def test_metrics_samples_keep_backtest_values() -> None:
     assert flagship["max_drawdown"] == pytest.approx(-0.235810, abs=1e-6)
     assert flagship["sharpe"] == pytest.approx(0.4138, abs=1e-4)
     assert flagship["cost_ratio"] == pytest.approx(0.100159, abs=1e-6)
+    assert flagship["turnover"] == pytest.approx(38.71, abs=1e-2)
+    assert zz1000["turnover"] == pytest.approx(3.88, abs=1e-2)
     assert (flagship["trades"], flagship["rejects"]) == (950, 1)
     assert zz1000["total_return"] == pytest.approx(0.339833, abs=1e-6)
     assert zz1000["excess_return"] == pytest.approx(0.064841, abs=1e-6)
@@ -900,24 +922,24 @@ def test_evidence_uses_local_nav_svgs(page: Page) -> None:
         assert image.attrs.get("alt", "").strip(), "净值图缺少 alt"
 
 
-def test_evidence_cards_stack_on_narrow_screens() -> None:
-    css = SITE_CSS.read_text(encoding="utf-8")
-    selector = ".evidence__grid"
-    assert selector in css, "样式缺少证据卡片布局"
+def test_evidence_cards_stack_on_narrow_screens(page: Page) -> None:
+    cards = [
+        element
+        for element in page.find("article")
+        if "evidence" in element.scopes and element.attrs.get("id")
+    ]
+    assert len(cards) == 2, "证据区应有两张样本卡片"
 
-    bodies: list[str] = []
-    for match in re.finditer(re.escape(selector), css):
-        brace = css.find("{", match.end())
-        if brace != -1:
-            bodies.append(_css_block(css, brace))
-    assert any("repeat(2, minmax(0, 1fr))" in body for body in bodies), "桌面应两栏"
+    css = SITE_CSS.read_text(encoding="utf-8")
+    assert re.search(r"grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)", css), (
+        "桌面应两栏"
+    )
 
     stacked = [
         body
         for condition, body in _media_blocks(css)
         if re.search(r"max-width:\s*768px", condition)
-        and selector in body
-        and "minmax(0, 1fr)" in body
+        and "grid-template-columns: minmax(0, 1fr)" in body
     ]
     assert stacked, "768 以下证据卡片应单列"
 

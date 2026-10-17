@@ -178,9 +178,21 @@ def test_metrics_follow_backtest_caliber(workspace: Path) -> None:
     assert sample["total_return"] == pytest.approx(0.2)
     assert sample["max_drawdown"] == pytest.approx(expected_drawdown, abs=1e-6)
     assert sample["sharpe"] == pytest.approx(expected_sharpe, abs=1e-6)
+    assert sample["turnover"] == pytest.approx(0.5 * len(NAV), abs=1e-6)
     assert sample["excess_return"] == pytest.approx(
         PORTFOLIO_NAV[-1] / BENCHMARK_NAV[-1] - 1, abs=1e-6
     )
+
+
+def test_turnover_is_rounded_to_two_decimals(workspace: Path) -> None:
+    metrics = _build(workspace)
+    flagship = metrics["samples"]["flagship"]
+    zz1000 = metrics["samples"]["zz1000"]
+
+    assert flagship["turnover"] == pytest.approx(2.0)
+    assert zz1000["turnover"] == pytest.approx(2.0)
+    assert format_metric("flagship.turnover", 38.7148) == "38.71"
+    assert format_metric("zz1000.turnover", 3.8832) == "3.88"
 
 
 def test_report_fields_are_parsed_not_invented(workspace: Path) -> None:

@@ -2,7 +2,8 @@
 
 只写 ``site/assets/`` 与 ``site/index.html`` 里 ``data-metric`` 元素的文本：
 ``metrics.json``、两张净值 SVG、复制因子相关性热图。数字口径与
-``scripts/backtest_e2e.py:compute_metrics`` 一致，成交 / 拒单 / 费用从 ``report.md`` 解析。
+``scripts/backtest_e2e.py:compute_metrics`` 一致，总换手从 ``nav.parquet`` 累加，
+成交 / 拒单 / 费用从 ``report.md`` 解析。
 
 运行：``uv run python scripts/build_site_assets.py``
 """
@@ -145,21 +146,17 @@ def _build_sample(
     *,
     sample_id: str,
     label: str,
-    run_dir: Path,
+    nav: pl.DataFrame,
+    benchmark: pl.DataFrame,
+    report_path: Path,
     note: str | None = None,
 ) -> dict[str, Any]:
-    nav_path = run_dir / "nav.parquet"
-    benchmark_path = run_dir / "benchmark.parquet"
-    report_path = run_dir / "report.md"
-
-    nav = _read_parquet(nav_path)
-    benchmark = _read_parquet(benchmark_path)
     if nav.height != benchmark.height:
         raise ValueError(
-            f"{run_dir} 的 nav 与 benchmark 行数不一致：{nav.height} / {benchmark.height}"
+            f"{report_path.parent} 的 nav 与 benchmark 行数不一致：{nav.height} / {benchmark.height}"
         )
     if nav["date"].to_list() != benchmark["date"].to_list():
-        raise ValueError(f"{run_dir} 的 nav 与 benchmark 交易日不一致")
+        raise ValueError(f"{report_path.parent} 的 nav 与 benchmark 交易日不一致")
 
     report = _parse_report(report_path)
     config = report.get("配置", {})
@@ -172,11 +169,11 @@ def _build_sample(
             f"{initial_cash} / {float(nav['nav'][0])}"
         )
 
-    total_return, max_drawdown, sharpe, _ = _series_metrics(nav)
+    total_return, max_drawdown, sharpe, turnover = _series_metrics(nav)
     portfolio_last = float(benchmark["portfolio_nav"][-1])
     benchmark_last = float(benchmark["benchmark_nav"][-1])
     if benchmark_last <= 0.0:
-        raise ValueError(f"{benchmark_path} 的基准净值必须为正")
+        raise ValueError(f"{report_path} 的基准净值必须为正")
     excess_return = portfolio_last / benchmark_last - 1.0
 
     dates = nav["date"].to_list()
@@ -191,6 +188,7 @@ def _build_sample(
         "excess_return": round(excess_return, 6),
         "max_drawdown": round(max_drawdown, 6),
         "sharpe": round(sharpe, 6),
+        "turnover": round(turnover, 2),
         "nav_svg": f"nav-{sample_id}.svg",
         "label": label,
         "disclaimer": DISCLAIMER,
@@ -319,8 +317,8 @@ def build_metrics(
         raise MissingInputError("\n".join(str(path) for path in missing))
 
     flagship_nav = _read_parquet(flagship_run / "nav.parquet")
-    zz1000_nav = _read_parquet(zz1000_run / "nav.parquet")
     flagship_bench = _read_parquet(flagship_run / "benchmark.parquet")
+    zz1000_nav = _read_parquet(zz1000_run / "nav.parquet")
     zz1000_bench = _read_parquet(zz1000_run / "benchmark.parquet")
 
     metrics: dict[str, Any] = {
@@ -329,12 +327,16 @@ def build_metrics(
             "flagship": _build_sample(
                 sample_id="flagship",
                 label="旗舰 10 万样本",
-                run_dir=flagship_run,
+                nav=flagship_nav,
+                benchmark=flagship_bench,
+                report_path=flagship_run / "report.md",
             ),
             "zz1000": _build_sample(
                 sample_id="zz1000",
                 label="中证 1000 指数增强月度样本",
-                run_dir=zz1000_run,
+                nav=zz1000_nav,
+                benchmark=zz1000_bench,
+                report_path=zz1000_run / "report.md",
                 note=ZZ1000_NOTE,
             ),
         },
@@ -392,7 +394,7 @@ def format_metric(key: str, value: Any) -> str:
         return f"{float(value):.2%}"
     if key.endswith(".cost_ratio"):
         return f"{float(value):.1%}"
-    if key.endswith(".sharpe"):
+    if key.endswith((".sharpe", ".turnover")):
         return f"{float(value):.2f}"
     if key.endswith((".trades", ".rejects")) or key.startswith("factors."):
         return str(int(value))

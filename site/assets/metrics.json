@@ -22,7 +22,8 @@
       "start": "2025-01-02",
       "strategy": "stock_selection",
       "total_return": 0.136633,
-      "trades": 950
+      "trades": 950,
+      "turnover": 38.71
     },
     "zz1000": {
       "benchmark": "000852",
@@ -40,7 +41,8 @@
       "start": "2025-01-02",
       "strategy": "index_enhanced",
       "total_return": 0.339833,
-      "trades": 1517
+      "trades": 1517,
+      "turnover": 3.88
     }
   }
 }

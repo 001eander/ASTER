@@ -143,7 +143,7 @@
 
         <figure class="figure">
           <img src="assets/agent-loop.svg" alt="Agent 因子挖掘闭环示意图：课题下达后，每一轮并行提出 3 条灵感，在断网沙盒里评分，结果写入 trace；通过门控的因子进入因子库，未过线的灵感回到下一轮。" width="720" height="500" decoding="async">
-          <figcaption>闭环示意：课题 → 灵感（每轮 3 条）→ 沙盒评分 → trace → 门控 → 因子库，入库的空隙又成为下一轮课题的来源。连续 3 轮没有产出，课题转入休眠，之后可以复活。</figcaption>
+          <figcaption>闭环示意：课题、灵感（每轮 3 条）、沙盒评分、trace、门控依次推进，过线因子进入因子库，入库的空隙又成为下一轮课题的来源。连续 3 轮没有产出，课题转入休眠，之后可以复活。</figcaption>
         </figure>
 
         <dl class="loop-facts">
@@ -213,7 +213,7 @@
           </li>
           <li>
             <h4 class="step__term">入库门控与整库</h4>
-            <p>进库前检查 <code>|max_corr|</code>，超过 0.7 直接拒绝；定期整库时同一相关簇只留最强的一条；pool 容量不超过库内总条目数的一半，保持库的多样性。</p>
+            <p>进库前检查 <code>|max_corr|</code>，超过 0.7 直接拒绝。定期整库时同一相关簇只留最强的一条，pool 容量不超过库内总条目数的一半，保持库的多样性。</p>
           </li>
         </ol>
 
@@ -224,7 +224,7 @@
         </div>
 
         <figure class="figure">
-          <img src="assets/factor-corr.png" alt="26 个因子工件的两两截面相关系数热图。横纵轴都是因子 id，颜色越深表示相关系数越高；高相关块集中在动量、均线与波动率这些同族因子之间。" width="930" height="930" decoding="async">
+          <img src="assets/factor-corr.png" alt="26 个因子工件的两两截面相关系数热图。横纵轴都是因子 id，颜色越深表示相关系数越高；高相关块集中在动量、均线与波动率这些同族因子之间。" width="930" height="930" decoding="async" onerror="this.closest('figure').hidden = true">
           <figcaption>因子库相关性热图：26 个因子工件的两两截面相关。颜色越深相关越高；门控以 0.7 为拒入阈值，整库时同一相关簇只留最强的一条。</figcaption>
         </figure>
       </div>
@@ -488,6 +488,10 @@
                   <dd><span class="mono" data-metric="flagship.sharpe">0.41</span></dd>
                 </div>
                 <div>
+                  <dt>总换手</dt>
+                  <dd><span class="mono" data-metric="flagship.turnover">38.71</span></dd>
+                </div>
+                <div>
                   <dt>成交</dt>
                   <dd><span class="mono" data-metric="flagship.trades">950</span> 笔</dd>
                 </div>
@@ -605,7 +609,7 @@
               <li><a href="slides/#11"><span class="slide-catalog__index mono">11</span><span class="slide-catalog__title">未来规划</span></a></li>
             </ol>
             <p class="slides-entry__action"><a class="slide-cta" href="slides/">打开答辩幻灯片</a></p>
-            <p class="slides-entry__note">方向键左右翻页，Home / End 跳到首尾；打印时一页一张幻灯片；断网时可打开单文件导出。</p>
+            <p class="slides-entry__note">方向键左右翻页，Home / End 跳到首尾。打印时一页一张幻灯片，断网时可打开单文件导出。</p>
           </div>
         </div>
       </div>
