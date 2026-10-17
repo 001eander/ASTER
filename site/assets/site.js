@@ -7,3 +7,19 @@ if (skip && main) {
     main.focus({ preventScroll: true });
   });
 }
+
+// 打印时展开回测证据区，打印结束恢复到打印前的展开状态。
+const evidence = document.querySelector("details[data-evidence]");
+let evidenceWasOpen = null;
+
+window.addEventListener("beforeprint", () => {
+  if (!evidence || evidenceWasOpen !== null) return;
+  evidenceWasOpen = evidence.open;
+  evidence.open = true;
+});
+
+window.addEventListener("afterprint", () => {
+  if (!evidence || evidenceWasOpen === null) return;
+  evidence.open = evidenceWasOpen;
+  evidenceWasOpen = null;
+});
