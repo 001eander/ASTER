@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 132" width="1120" height="132" role="img">
+  <title>因子库构成与血统链</title>
+  <desc>条形图按血统操作拆分 26 个因子工件：13 个种子位于第 0 代，10 个变异与 3 个交叉位于第 1 代，均来自 flagship-mining。下方血统链从 seed 指向 mutation 与 crossover，再汇入因子库，每条记录写入 op、parents、run_id、generation 四个字段。</desc>
+  <defs>
+    <marker id="lib-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7a5bb5"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="132" fill="#fcfaf5"/>
+
+  <!-- 构成条：26 = 13 + 10 + 3 -->
+  <rect x="0" y="0" width="560" height="32" fill="#d9cff0" stroke="#fcfaf5"/>
+  <rect x="560" y="0" width="430" height="32" fill="#b9a7e0" stroke="#fcfaf5"/>
+  <rect x="990" y="0" width="130" height="32" fill="#7a5bb5" stroke="#fcfaf5"/>
+  <text x="280" y="22" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="15" fill="#191512">13 种子</text>
+  <text x="775" y="22" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="15" fill="#191512">10 变异</text>
+  <text x="1055" y="22" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="15" fill="#fcfaf5">3 交叉</text>
+
+  <text x="0" y="54" font-family="Cascadia Mono, Consolas, monospace" font-size="12" fill="#4d463d">第 0 代 · run_id null</text>
+  <text x="1120" y="54" text-anchor="end" font-family="Cascadia Mono, Consolas, monospace" font-size="12" fill="#4d463d">第 1 代 · run_id flagship-mining</text>
+
+  <!-- 血统链 -->
+  <rect x="0" y="66" width="220" height="60" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="110" y="92" text-anchor="middle" font-family="Cascadia Mono, Consolas, monospace" font-size="17" fill="#191512">seed</text>
+  <text x="110" y="113" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#4d463d">13 条 · parents []</text>
+
+  <rect x="268" y="66" width="230" height="60" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="383" y="92" text-anchor="middle" font-family="Cascadia Mono, Consolas, monospace" font-size="17" fill="#191512">mutation</text>
+  <text x="383" y="113" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#4d463d">10 条 · 第 1 代</text>
+
+  <rect x="546" y="66" width="220" height="60" fill="#f6f3ec" stroke="#d6cebe"/>
+  <text x="656" y="92" text-anchor="middle" font-family="Cascadia Mono, Consolas, monospace" font-size="17" fill="#191512">crossover</text>
+  <text x="656" y="113" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#4d463d">3 条 · 第 1 代</text>
+
+  <rect x="814" y="66" width="306" height="60" fill="#f6f3ec" stroke="#7a5bb5" stroke-width="1.2"/>
+  <text x="967" y="92" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="17" fill="#191512">因子库</text>
+  <text x="967" y="113" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#4d463d">26 条 · 全部 status 为 pool</text>
+
+  <g stroke="#7a5bb5" stroke-width="1.4" fill="none" marker-end="url(#lib-arrow)">
+    <path d="M226 96 H 262"/>
+    <path d="M504 96 H 540"/>
+    <path d="M772 96 H 808"/>
+  </g>
+</svg>

@@ -328,6 +328,196 @@ a {
   margin-top: 6px;
 }
 
+/* 项目部分（#159）：总览、架构、Agent 闭环、因子库 */
+
+.lede {
+  max-width: 88ch;
+  font-size: 20px;
+  line-height: 1.7;
+  color: var(--color-ink-muted);
+}
+
+.slide__body--tight {
+  gap: 22px;
+}
+
+.slide__body--split {
+  display: grid;
+  grid-template-columns: minmax(0, 520px) minmax(0, 1fr);
+  gap: 36px;
+  align-items: start;
+}
+
+.grid--3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px 32px;
+}
+
+.grid--3 .block__title {
+  font-size: 22px;
+}
+
+.grid--3 .block__text,
+.grid--3 .list {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.grid--4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.grid--4 .block__title {
+  font-size: 20px;
+}
+
+.grid--4 .block__text {
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.block__index {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  color: var(--color-accent);
+}
+
+.block--tight {
+  padding-top: 10px;
+}
+
+.block--tight .block__title {
+  font-size: 21px;
+  margin-top: 2px;
+}
+
+.block--tight .block__text {
+  margin-top: 6px;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.defense .block__title {
+  font-size: 20px;
+}
+
+.defense .block__text {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.list--tight {
+  padding-left: 1.05em;
+  line-height: 1.6;
+}
+
+.list--tight li + li {
+  margin-top: 4px;
+}
+
+.strip {
+  margin-top: auto;
+  padding: 12px 20px;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-paper);
+  font-size: 18px;
+  color: var(--color-ink);
+}
+
+.figure {
+  margin: 0;
+  min-width: 0;
+}
+
+.figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: var(--rule);
+  background: var(--color-paper-raised);
+}
+
+.figure figcaption {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-ink-muted);
+}
+
+.terms {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0;
+}
+
+.terms li {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 14px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: var(--slide-rule);
+}
+
+.terms li:first-child {
+  border-top: 2px solid var(--color-rule);
+}
+
+.term {
+  font-family: var(--font-serif);
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.term__text {
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--color-ink-muted);
+}
+
+.facts {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 2px solid var(--color-accent);
+}
+
+.facts dt {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--color-accent);
+}
+
+.facts dd {
+  margin: 3px 0 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--color-ink);
+}
+
+.lineage {
+  margin: 0;
+  padding-top: 10px;
+  border-top: var(--slide-rule);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-ink-muted);
+}
+
+.lineage code {
+  font-size: 14px;
+  color: var(--color-accent);
+}
+
 /* 翻页控件 */
 
 .deck-chrome {

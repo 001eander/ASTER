@@ -1,13 +1,17 @@
-"""幻灯片 deck（#158）的静态验收。
+"""幻灯片 deck（#158 / #159）的静态验收。
 
-覆盖 11 页骨架与页码、五部分顺序、封面与前三页内容、默认与无 JS 状态、
-打印钩子、本地资源边界，以及纯路由模块的存在与引用。
+覆盖 11 页骨架与页码、五部分顺序、封面与前三页内容、第 4 到第 7 页的
+项目部分（问题/目标/三层、三层与因子库接口、Agent 六术语闭环、
+26/13/10/3 与四层共线性防御、血统链）、默认与无 JS 状态、打印钩子、
+本地资源边界，以及纯路由模块的存在与引用。
 深链接与翻页边界的行为由 `src/slides-route.test.ts` 覆盖。
 """
 
 from __future__ import annotations
 
+import json
 import re
+from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -21,10 +25,15 @@ DECK_CSS = SLIDES / "slides.css"
 DECK_JS = SLIDES / "slides.js"
 ROUTE_JS = SLIDES / "slides-route.js"
 TOKENS = SITE / "assets" / "tokens.css"
+REGISTRY = ROOT / "factor_library" / "registry.json"
 
 TITLE = "【拉普拉斯奖学金】陶唐-上海财经大学-本科-数据科学与大数据技术-2024级"
 PAGE_COUNT = 11
 PARTS = ("1", "2", "3") + ("4",) * 7 + ("5",)
+CAPTURED_TAGS = {"h1", "h2", "h3", "figcaption"}
+PROJECT_SLIDES = {4: "项目总览", 5: "系统架构", 6: "Agent 因子挖掘", 7: "因子库与门控"}
+LOOP_TERMS = ("课题", "灵感", "轮", "trace", "沙盒", "门控")
+DEFENSE_LAYERS = ("源头分流", "生成避让", "评分折扣", "入库与整库")
 
 VOID = {
     "area",
@@ -62,12 +71,14 @@ class Page(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.elements: list[Element] = []
         self.scripts: list[str] = []
+        self.captures: list[tuple[str, str, tuple[str, ...]]] = []
         self._open: list[tuple[str, str | None]] = []
         self._all: list[str] = []
         self._by_id: dict[str, list[str]] = {}
         self._title: list[str] = []
         self._in_script = False
         self._in_title = False
+        self._capture: list[tuple[str, list[str], tuple[str, ...]]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = {key: (value or "") for key, value in attrs}
@@ -77,6 +88,8 @@ class Page(HTMLParser):
             self._in_script = True
         if tag == "title":
             self._in_title = True
+        if tag in CAPTURED_TAGS:
+            self._capture.append((tag, [], scopes))
         if tag not in VOID:
             self._open.append((tag, attr.get("id")))
 
@@ -90,6 +103,9 @@ class Page(HTMLParser):
             self._in_script = False
         if tag == "title":
             self._in_title = False
+        if tag in CAPTURED_TAGS and self._capture and self._capture[-1][0] == tag:
+            captured_tag, parts, scopes = self._capture.pop()
+            self.captures.append((captured_tag, " ".join("".join(parts).split()), scopes))
         for index in range(len(self._open) - 1, -1, -1):
             if self._open[index][0] == tag:
                 del self._open[index:]
@@ -101,6 +117,8 @@ class Page(HTMLParser):
             self.scripts.append(data)
         if self._in_title:
             self._title.append(data)
+        if self._capture:
+            self._capture[-1][1].append(data)
         for _, ident in self._open:
             if ident:
                 self._by_id.setdefault(ident, []).append(data)
@@ -130,6 +148,14 @@ class Page(HTMLParser):
             if element.attrs.get("data-slide") == str(number):
                 return element
         raise AssertionError(f"缺少第 {number} 页")
+
+    def inside(self, tag: str, number: int) -> list[Element]:
+        scope = f"slide-{number}"
+        return [element for element in self.find(tag) if scope in element.scopes]
+
+    def captured(self, tag: str, number: int) -> list[str]:
+        scope = f"slide-{number}"
+        return [text for name, text, scopes in self.captures if name == tag and scope in scopes]
 
 
 @pytest.fixture(scope="module")
@@ -234,12 +260,95 @@ def test_ai_learning_slide_covers_preparation(page: Page) -> None:
 
 
 def test_placeholder_slides_stay_skeleton(page: Page) -> None:
-    for number in range(4, PAGE_COUNT + 1):
+    for number in range(8, PAGE_COUNT + 1):
         element = page.slide(number)
         text = compact(page.text_of(element.attrs["id"]))
         assert "待补充" in text, f"第 {number} 页应保留待补充占位"
         for premature in ("已实现", "规划中", "AutoResearch", "26个因子工件"):
             assert premature not in text, f"第 {number} 页提前写入后续票据内容：{premature}"
+
+
+def test_project_slides_replace_placeholders(page: Page) -> None:
+    for number, title in PROJECT_SLIDES.items():
+        element = page.slide(number)
+        text = compact(page.text_of(element.attrs["id"]))
+        assert "待补充" not in text, f"第 {number} 页仍是占位"
+        assert element.attrs.get("data-part") == "4"
+        assert element.attrs.get("aria-labelledby") == f"slide-{number}-title"
+        titles = [compact(value) for value in page.captured("h2", number)]
+        assert titles == [compact(title)], f"第 {number} 页 h2 应为 {title}"
+
+
+def test_overview_slide_covers_problem_goal_and_layers(page: Page) -> None:
+    text = compact(page.text_of("slide-4"))
+    for item in ("问题", "目标", "三层架构", "数据层", "研究层", "生产层"):
+        assert item in text, f"第 4 页缺少 {item}"
+    assert text.index("数据层") < text.index("研究层") < text.index("生产层")
+    for item in ("alpha", "衰减", "因子库", "T+1调仓单", "沙盒", "可复现"):
+        assert item in text, f"第 4 页缺少 {item}"
+
+
+def test_architecture_slide_explains_single_interface(page: Page) -> None:
+    text = compact(page.text_of("slide-5"))
+    assert "研究层与生产层解耦，因子库是唯一接口。" in text
+    assert [compact(value) for value in page.captured("h3", 5)] == ["数据层", "研究层", "生产层"]
+    for item in ("akshare", "Parquet", "沙盒", "每日跑批", "T+1调仓单", "因子工件"):
+        assert item in text, f"第 5 页缺少 {item}"
+
+
+def test_agent_loop_slide_orders_six_terms(page: Page) -> None:
+    headings = [compact(value) for value in page.captured("h3", 6)]
+    assert headings[: len(LOOP_TERMS)] == [compact(term) for term in LOOP_TERMS]
+    text = compact(page.text_of("slide-6"))
+    for item in ("3条灵感", "活跃课题上限3", "30轮熔断", "连续3轮无产出", "入库10个低相关因子", "休眠"):
+        assert item in text, f"第 6 页缺少 {item}"
+
+
+def test_factor_library_slide_counts_match_registry(page: Page) -> None:
+    registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    factors = registry["factors"]
+    ops = Counter(factor["lineage"]["op"] for factor in factors)
+    assert (ops["seed"], ops["mutation"], ops["crossover"]) == (13, 10, 3)
+    text = compact(page.text_of("slide-7"))
+    expected = (
+        f"{len(factors)}个因子工件="
+        f"{ops['seed']}种子+{ops['mutation']}变异+{ops['crossover']}交叉"
+    )
+    assert expected in text, f"第 7 页缺少构成式 {expected}"
+
+
+def test_factor_library_slide_shows_four_layer_defense(page: Page) -> None:
+    text = compact(page.text_of("slide-7"))
+    positions = [text.index(name) for name in DEFENSE_LAYERS]
+    assert positions == sorted(positions), "四层防御顺序应为源头分流、生成避让、评分折扣、入库与整库"
+    for item in ("max_corr", "0.7", "50%", "同簇留强"):
+        assert item in text, f"第 7 页缺少 {item}"
+
+
+def test_factor_library_slide_shows_lineage_chain(page: Page) -> None:
+    text = compact(page.text_of("slide-7"))
+    assert "lineage{op,parents,run_id,generation}" in text
+    for item in ("seed", "mutation", "crossover", "flagship-mining"):
+        assert item in text, f"第 7 页缺少 {item}"
+
+
+def test_project_slides_carry_one_labelled_figure(page: Page) -> None:
+    for number in (5, 6, 7):
+        images = page.inside("img", number)
+        assert len(images) == 1, f"第 {number} 页应有一张主图"
+        image = images[0]
+        src = image.attrs.get("src", "")
+        alt = image.attrs.get("alt", "").strip()
+        assert src.startswith("../assets/") and src.endswith(".svg"), f"第 {number} 页主图应为本地 SVG"
+        assert "factor-corr" not in src, "不得引用并行票据尚未生成的图片"
+        assert len(alt) >= 20, f"第 {number} 页主图 alt 太短"
+        target = (SLIDES / src).resolve()
+        assert target.exists(), f"{src} 不存在"
+        assert "<svg" in target.read_text(encoding="utf-8")
+        assert len(page.inside("figure", number)) == 1, f"第 {number} 页主图应包在 figure 里"
+        captions = page.captured("figcaption", number)
+        assert captions and len(compact(captions[0])) >= 12, f"第 {number} 页缺少图注"
+
 
 
 def test_default_state_is_first_slide(page: Page) -> None:
@@ -336,7 +445,8 @@ def test_route_module_is_pure_and_exports_contract() -> None:
 
 
 def test_assets_are_local_and_resolve(page: Page) -> None:
-    assert not page.find("img"), "本票据不引入图片"
+    for image in page.find("img"):
+        assert image.attrs.get("alt", "").strip(), "每张图片都必须有 alt"
     for element in page.elements:
         for attribute in ("href", "src"):
             value = element.attrs.get(attribute)
