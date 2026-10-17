@@ -1,0 +1,57 @@
+/**
+ * ASTER 展示站设计 token：纸白底、墨黑正文、单一星菀紫强调色、深色页首。
+ * 只在 :root 定义一次，页面样式一律引用变量。
+ */
+:root {
+  color-scheme: light;
+
+  /* 色板 */
+  --color-paper: #f6f3ec;
+  --color-paper-raised: #fcfaf5;
+  --color-ink: #191512;
+  --color-ink-muted: #4d463d;
+  --color-rule: #d6cebe;
+  --color-accent: #7a5bb5;
+  --color-accent-soft: #b9a7e0;
+  --color-hero-bg: #17131f;
+  --color-hero-ink: #f1ecf7;
+  --color-hero-muted: #b8aecb;
+
+  /* 字体栈：中文标题衬线，正文系统无衬线，数字等宽 */
+  --font-serif: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", Georgia, serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+
+  /* 字号阶梯 */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: clamp(1.6rem, 1.2rem + 1.6vw, 2.4rem);
+  --text-display: clamp(3.2rem, 1.8rem + 6vw, 6.5rem);
+
+  /* 间距 */
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2.5rem;
+  --space-xl: 4rem;
+  --space-2xl: clamp(4.5rem, 10vw, 8rem);
+
+  /* 版心与细线 */
+  --shell: 72rem;
+  --gutter: clamp(1.25rem, 4vw, 4.5rem);
+  --rule: 1px solid var(--color-rule);
+
+  /* 断点：媒体查询里必须写字面量，变量只作来源记录 */
+  --breakpoint-wide: 1440px;
+  --breakpoint-laptop: 1024px;
+  --breakpoint-tablet: 768px;
+  --breakpoint-phone: 390px;
+
+  /* 动效 */
+  --duration: 160ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+}
