@@ -1,4 +1,4 @@
-"""展示站主页的静态验收：标题、页首字段、导航、外链与资源边界。
+"""展示站主页的静态验收：标题、页首字段、导航、外链与资源边界，以及系统全景与 Agent 两段。
 
 测试只解析站点产物，不依赖 CSS 类名或 DOM 层级。
 """
@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -52,6 +53,9 @@ RESERVED_SECTION_IDS = (
     "slides",
 )
 
+LAYER_TERMS = ("数据层", "研究层", "生产层")
+AGENT_TERMS = ("课题", "灵感", "轮", "trace", "沙盒", "门控")
+
 
 def compact(text: str) -> str:
     """去掉全部空白，便于断言跨行、带空格的字段。"""
@@ -66,16 +70,19 @@ class Element:
 
 
 class Page(HTMLParser):
-    """收集标签、属性与按 id 归属的文本。"""
+    """收集标签、属性、按 id 归属的文本与图注文本。"""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.elements: list[Element] = []
         self.scripts: list[str] = []
+        self.captions: list[tuple[tuple[str, ...], str]] = []
         self._open: list[tuple[str, str | None]] = []
         self._all: list[str] = []
         self._by_id: dict[str, list[str]] = {}
         self._title: list[str] = []
+        self._caption: list[str] | None = None
+        self._caption_scopes: tuple[str, ...] = ()
         self._in_script = False
         self._in_title = False
 
@@ -87,6 +94,9 @@ class Page(HTMLParser):
             self._in_script = True
         if tag == "title":
             self._in_title = True
+        if tag == "figcaption":
+            self._caption = []
+            self._caption_scopes = scopes
         if tag not in VOID:
             self._open.append((tag, attr.get("id")))
 
@@ -100,6 +110,10 @@ class Page(HTMLParser):
             self._in_script = False
         if tag == "title":
             self._in_title = False
+        if tag == "figcaption" and self._caption is not None:
+            caption = " ".join("".join(self._caption).split())
+            self.captions.append((self._caption_scopes, caption))
+            self._caption = None
         for index in range(len(self._open) - 1, -1, -1):
             if self._open[index][0] == tag:
                 del self._open[index:]
@@ -111,9 +125,12 @@ class Page(HTMLParser):
             self.scripts.append(data)
         if self._in_title:
             self._title.append(data)
+        if self._caption is not None:
+            self._caption.append(data)
         for _, ident in self._open:
             if ident:
                 self._by_id.setdefault(ident, []).append(data)
+
 
     @property
     def text(self) -> str:
@@ -202,6 +219,79 @@ def test_navigation_carries_repository_and_wiki(page: Page) -> None:
     hrefs = [element.attrs.get("href") for element in page.find("a")]
     assert REPO in hrefs
     assert WIKI in hrefs
+
+
+def test_navigation_links_to_system_and_agent(page: Page) -> None:
+    assert page.find("nav"), "缺少导航"
+    hrefs = {element.attrs.get("href") for element in page.find("a") if "top" in element.scopes}
+    for target in ("#system", "#agent"):
+        assert target in hrefs, f"导航缺少 {target}"
+    assert page.has_id("system") and page.has_id("agent")
+
+
+def test_home_orders_sections_from_hero_to_author(page: Page) -> None:
+    ids = [element.attrs.get("id") for element in page.elements]
+    for ident in ("top", "system", "agent", "author"):
+        assert ident in ids, f"缺少 #{ident}"
+    assert ids.index("top") < ids.index("system") < ids.index("agent") < ids.index("author")
+
+
+def test_system_section_reads_in_layer_order(page: Page) -> None:
+    text = compact(page.text_of("system"))
+    assert len(text) >= 200, "#system 内容过少"
+    positions = [text.find(term) for term in LAYER_TERMS]
+    for term, position in zip(LAYER_TERMS, positions):
+        assert position >= 0, f"系统全景缺少 {term}"
+    assert positions == sorted(positions), "三层顺序应为数据层、研究层、生产层"
+
+
+def test_factor_library_is_the_only_interface(page: Page) -> None:
+    text = compact(page.text_of("system"))
+    assert "研究层与生产层解耦" in text
+    assert "因子库是唯一接口" in text
+    assert "pool" in text, "接口说明应指出生产层只读 pool 条目"
+
+
+def test_agent_section_covers_six_terms_in_order(page: Page) -> None:
+    text = compact(page.text_of("agent"))
+    assert len(text) >= 200, "#agent 内容过少"
+    positions = [text.find(term) for term in AGENT_TERMS]
+    for term, position in zip(AGENT_TERMS, positions):
+        assert position >= 0, f"Agent 段缺少 {term}"
+    assert positions == sorted(positions), "六个概念应按课题、灵感、轮、trace、沙盒、门控的顺序出现"
+
+
+def test_agent_section_states_loop_budget(page: Page) -> None:
+    text = compact(page.text_of("agent"))
+    for item in ("3条灵感", "上限3", "30轮", "连续3轮无产出", "10个低相关因子"):
+        assert item in text, f"Agent 段缺少关键数字 {item}"
+
+
+def test_agent_loop_figure_has_alt_and_caption(page: Page) -> None:
+    images = [
+        element
+        for element in page.find("img")
+        if "agent" in element.scopes and element.attrs.get("src", "").endswith("agent-loop.svg")
+    ]
+    assert len(images) == 1, "Agent 段需要一张本地 agent-loop.svg 闭环图"
+    assert images[0].attrs.get("alt", "").strip(), "闭环图缺少 alt"
+
+    captions = [text for scopes, text in page.captions if "agent" in scopes]
+    assert len(captions) == 1, "闭环图需要一条图注"
+    assert "闭环" in compact(captions[0]), "图注应说明闭环"
+
+
+def test_agent_loop_asset_is_self_contained_svg() -> None:
+    asset = SITE / "assets" / "agent-loop.svg"
+    assert asset.exists(), "缺少 site/assets/agent-loop.svg"
+    source = asset.read_text(encoding="utf-8")
+    root = ElementTree.fromstring(source)
+    assert root.tag.endswith("svg"), "agent-loop.svg 根节点不是 svg"
+    assert "href" not in source, "闭环图不应引用外部资源"
+    assert "<image" not in source
+    for term in AGENT_TERMS:
+        assert term in source, f"闭环图缺少 {term}"
+
 
 
 def test_author_section_completes_application_record(page: Page) -> None:

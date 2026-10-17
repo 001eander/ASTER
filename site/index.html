@@ -22,6 +22,8 @@
           </svg>
           ASTER <span>星菀</span>
         </a>
+        <a class="nav__link" href="#system">系统</a>
+        <a class="nav__link" href="#agent">Agent</a>
         <a class="nav__link" href="#author">作者</a>
         <a class="nav__link" href="#footer">声明</a>
         <a class="nav__link" href="https://github.com/001eander/ASTER">仓库</a>
@@ -70,6 +72,100 @@
   </header>
 
   <main id="main" tabindex="-1">
+    <section class="section" id="system" aria-labelledby="system-title">
+      <div class="shell">
+        <p class="kicker">系统全景</p>
+        <h2 class="section__title" id="system-title">三层分工，一个接口</h2>
+        <p class="section__lede">每天的日常工作分成三层：数据层准备数据，研究层生产因子与信号，生产层把信号落成调仓单。三层之间只在一处交接，交接物是因子库里的因子工件。</p>
+
+        <ol class="layers">
+          <li class="layer">
+            <p class="layer__index">01</p>
+            <h3 class="layer__title">数据层</h3>
+            <p class="layer__body">akshare（锁 1.18.97）每日增量，CSMAR 离线包回填；校验完整性、异常值与复权一致性后落 Parquet 缓存，并预计算涨跌停上下限、复权价、交易日历与分红送转。数据体检不过，当天跑批直接中止。</p>
+            <p class="layer__meta">增量 · 校验 · 缓存 · 预计算</p>
+          </li>
+          <li class="layer">
+            <p class="layer__index">02</p>
+            <h3 class="layer__title">研究层</h3>
+            <p class="layer__body">离线的 Agent 内循环，可以连跑数天。它读同一份缓存数据，在沙盒里评估假设，产出因子工件与信号工件，只把过线的因子写进因子库。研究层不接触生产账户，也不下单。</p>
+            <p class="layer__meta">离线 · 可连跑数天 · 只写因子库</p>
+          </li>
+          <li class="layer">
+            <p class="layer__index">03</p>
+            <h3 class="layer__title">生产层</h3>
+            <p class="layer__body">每个 T 日收盘后跑批：增量数据、重算 pool 因子、AutoML 截面打分、凸优化组合、整手与涨跌停预过滤，落成 T+1 调仓单，人工跟单后回录成交。</p>
+            <p class="layer__meta">每日跑批 · T+1 调仓单 · 人工跟单</p>
+          </li>
+        </ol>
+
+        <p class="interface"><strong>研究层与生产层解耦，因子库是唯一接口。</strong>研究层只写入过门控的因子工件，生产层只读 status 为 pool 的条目；库里的每一条都带指标与血统，可以追到来源与代数。</p>
+      </div>
+    </section>
+
+    <section class="section section--panel" id="agent" aria-labelledby="agent-title">
+      <div class="shell">
+        <p class="kicker">Agent 因子挖掘</p>
+        <h2 class="section__title" id="agent-title">一个课题接着一个课题地跑</h2>
+        <p class="section__lede">研究层在离线环境里连续运行数天：Agent 提出假设、写出因子代码、拿回评分，只有合格的因子才进入因子库。每一步都留下记录，结论可以复核。</p>
+
+        <ol class="steps">
+          <li>
+            <h3 class="step__term">课题</h3>
+            <p>因子挖掘的预算单元：方向边界、禁区、验收标准与排序键。由人工下达，或由 Agent 从因子库的空隙提出后交人工批准。活跃课题上限 3 个。</p>
+          </li>
+          <li>
+            <h3 class="step__term">灵感</h3>
+            <p>课题内的一次挖掘尝试：一条具体假设加构造思路。一轮并行评估 3 条灵感，全部完成才进入下一轮。</p>
+          </li>
+          <li>
+            <h3 class="step__term">轮</h3>
+            <p>课题内的节拍单位。一次 propose 产出若干条灵感，评估全部结束才推进；调度器在课题之间以轮为轮转单位，单个课题 30 轮熔断。</p>
+          </li>
+          <li>
+            <h3 class="step__term">trace</h3>
+            <p>课题内各轮假设、评估结果与反馈的按序记录，作用域限单个课题。下一轮 propose 时取最近若干条注入上下文，Agent 看得见自己试过什么、为什么被拒。</p>
+          </li>
+          <li>
+            <h3 class="step__term">沙盒</h3>
+            <p>断网 Docker，行情数据只读挂载。因子代码在沙盒里跑通、算分，产出 score.json；主流程拿不到写权限，评分不受本机状态影响。</p>
+          </li>
+          <li>
+            <h3 class="step__term">门控</h3>
+            <p>进库前必须全部通过的判定集合，给出单一的过线或不过线结论。过线的因子带上指标与血统入库，不过线的记进 trace 回到下一轮。</p>
+          </li>
+        </ol>
+
+        <figure class="figure">
+          <img src="assets/agent-loop.svg" alt="Agent 因子挖掘闭环示意图：课题下达后，每一轮并行提出 3 条灵感，在断网沙盒里评分，结果写入 trace；通过门控的因子进入因子库，未过线的灵感回到下一轮。" width="720" height="500" decoding="async">
+          <figcaption>闭环示意：课题 → 灵感（每轮 3 条）→ 沙盒评分 → trace → 门控 → 因子库，入库的空隙又成为下一轮课题的来源。连续 3 轮没有产出，课题转入休眠，之后可以复活。</figcaption>
+        </figure>
+
+        <dl class="loop-facts">
+          <div>
+            <dt>一轮</dt>
+            <dd>3 条灵感并行</dd>
+          </div>
+          <div>
+            <dt>活跃课题</dt>
+            <dd>上限 3 个</dd>
+          </div>
+          <div>
+            <dt>熔断</dt>
+            <dd>单课题 30 轮</dd>
+          </div>
+          <div>
+            <dt>休眠</dt>
+            <dd>连续 3 轮无产出</dd>
+          </div>
+          <div>
+            <dt>完成</dt>
+            <dd>入库 10 个低相关因子</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
     <section class="section" id="author" aria-labelledby="author-title">
       <div class="shell">
         <p class="kicker">关于作者</p>
