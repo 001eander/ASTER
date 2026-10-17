@@ -1,6 +1,8 @@
 """展示站主页的静态验收：标题、页首字段、导航、外链与资源边界，以及系统全景、Agent、因子库与 AutoML 各段。
 
-测试只解析站点产物，不依赖 CSS 类名或 DOM 层级。
+测试只解析站点产物，不依赖 CSS 类名或 DOM 层级。末尾覆盖 #162 的幻灯片入口
+（封面预览、11 项目录、进入按钮、无 iframe）、打印展开证据的钩子、
+reduced motion 与打印规则，以及全站无外部资源。
 """
 
 from __future__ import annotations
@@ -544,8 +546,12 @@ def test_body_text_meets_wcag_aa_contrast() -> None:
         ("color-ink", "color-paper"),
         ("color-ink-muted", "color-paper"),
         ("color-accent", "color-paper"),
+        ("color-ink", "color-paper-raised"),
+        ("color-ink-muted", "color-paper-raised"),
+        ("color-accent", "color-paper-raised"),
         ("color-hero-ink", "color-hero-bg"),
         ("color-hero-muted", "color-hero-bg"),
+        ("color-accent-soft", "color-hero-bg"),
     )
     for foreground, background in pairs:
         assert ratio(color(foreground), color(background)) >= 4.5, f"{foreground} 对比度不足"
@@ -914,3 +920,183 @@ def test_evidence_cards_stack_on_narrow_screens() -> None:
         and "minmax(0, 1fr)" in body
     ]
     assert stacked, "768 以下证据卡片应单列"
+
+
+# ---------------------------------------------------------------------------
+# 幻灯片入口与跨端收口（#162）
+# ---------------------------------------------------------------------------
+
+SITE_JS = SITE / "assets" / "site.js"
+DECK = SITE / "slides" / "index.html"
+DECK_CSS = SITE / "slides" / "slides.css"
+
+SLIDE_TITLES = (
+    "封面",
+    "个人简介",
+    "AI 学习与技术积累",
+    "项目总览",
+    "系统架构",
+    "Agent 因子挖掘",
+    "因子库与门控",
+    "AutoML 与 AutoResearch",
+    "组合优化与生产闭环",
+    "创新点与边界",
+    "未来规划",
+)
+
+
+def slides_section_source() -> str:
+    """截取主页 #slides 到 #author 之间的标记，避免命中其他栏目的同名文案。"""
+    source = HOME.read_text(encoding="utf-8")
+    start = source.index('id="slides"')
+    end = source.index('id="author"')
+    assert start < end, "幻灯片入口应位于作者区之前"
+    return source[start:end]
+
+
+def strip_tags(markup: str) -> str:
+    return compact(re.sub(r"<[^>]+>", "", markup))
+
+
+def test_slides_section_sits_between_evidence_and_author(page: Page) -> None:
+    ids = [element.attrs.get("id") for element in page.elements]
+    for ident in ("evidence", "slides", "author"):
+        assert ident in ids, f"缺少 #{ident}"
+    assert ids.index("evidence") < ids.index("slides") < ids.index("author"), (
+        "栏目顺序应为证据、幻灯片入口、作者"
+    )
+
+
+def test_slides_catalog_lists_eleven_pages_in_order() -> None:
+    section = slides_section_source()
+    entries = re.findall(
+        r'<li[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        section,
+        re.S,
+    )
+    assert len(entries) == 11, f"目录应有 11 项，实际 {len(entries)}"
+    assert [href for href, _ in entries] == [f"slides/#{number}" for number in range(1, 12)]
+    for (href, inner), title in zip(entries, SLIDE_TITLES):
+        assert compact(title) in strip_tags(inner), f"{href} 的标题应为 {title}"
+
+
+def test_slides_section_offers_primary_button() -> None:
+    section = slides_section_source()
+    buttons = [
+        strip_tags(inner)
+        for inner in re.findall(r'<a[^>]*href="slides/"[^>]*>(.*?)</a>', section, re.S)
+    ]
+    assert "打开答辩幻灯片" in buttons, "缺少进入 deck 的主按钮"
+
+
+def test_slides_cover_preview_replicates_first_slide() -> None:
+    section = slides_section_source()
+    previews = re.findall(r'<a[^>]*href="slides/"[^>]*>(.*?)</a>', section, re.S)
+    preview = next((inner for inner in previews if "ASTER" in inner), None)
+    assert preview is not None, "封面预览应整体链到 slides/"
+    text = strip_tags(preview)
+    for item in (
+        "ASTER",
+        "陶唐",
+        "上海财经大学",
+        "信息管理与工程学院",
+        "数据科学与大数据技术",
+        "2024级",
+    ):
+        assert item in text, f"封面预览缺少 {item}"
+    assert compact(TITLE) in text, "封面预览应含模板题名"
+
+
+def test_home_embeds_no_iframe(page: Page) -> None:
+    assert not page.find("iframe"), "主页不得嵌 iframe"
+    assert "iframe" not in slides_section_source().lower()
+
+
+def test_navigation_links_to_slides(page: Page) -> None:
+    hrefs = [element.attrs.get("href") for element in page.find("a") if "top" in element.scopes]
+    assert "#slides" in hrefs, "导航缺少 #slides 入口"
+    assert page.has_id("slides")
+
+
+def test_home_print_expands_evidence_and_restores_it() -> None:
+    script = SITE_JS.read_text(encoding="utf-8")
+    assert re.search(r'addEventListener\(\s*"beforeprint"', script), "缺少 beforeprint 钩子"
+    assert re.search(r'addEventListener\(\s*"afterprint"', script), "缺少 afterprint 钩子"
+    assert "data-evidence" in script, "打印钩子应定位证据 details"
+    assert re.search(r"\.open\s*=", script), "打印钩子应设置 details.open"
+    assert "open = true" in script, "打印时应展开证据区"
+
+
+def test_home_print_rules_hide_chrome_without_overflow() -> None:
+    css = SITE_CSS.read_text(encoding="utf-8")
+    assert "@media print" in css
+    print_block = css[css.index("@media print") :]
+    assert "display: none" in print_block
+    assert "button" in print_block, "打印时应隐藏按钮"
+    assert "nav" in print_block, "打印时应隐藏导航"
+    assert "slide" in print_block, "打印时应重排幻灯片入口"
+    assert "minmax(0, 1fr)" in print_block, "打印时入口应单列，避免横向溢出"
+
+
+def test_reduced_motion_switches_off_animation_and_smooth_scroll() -> None:
+    for path in (SITE_CSS, DECK_CSS):
+        css = path.read_text(encoding="utf-8")
+        blocks = [
+            body
+            for condition, body in _media_blocks(css)
+            if "prefers-reduced-motion" in condition
+        ]
+        assert blocks, f"{path.name} 缺少 reduced motion 规则"
+        body = " ".join(blocks)
+        assert "scroll-behavior: auto" in body, f"{path.name} 未关闭平滑滚动"
+        assert re.search(r"animation:\s*none", body), f"{path.name} 未关闭动画"
+        assert re.search(r"transition:\s*none", body), f"{path.name} 未关闭过渡"
+        assert "smooth" not in body, f"{path.name} reduced motion 下仍有平滑滚动"
+
+
+def test_slides_entry_stacks_on_phone() -> None:
+    css = SITE_CSS.read_text(encoding="utf-8")
+
+    def max_width(condition: str) -> int:
+        match = re.search(r"max-width:\s*(\d+)px", condition)
+        return int(match.group(1)) if match else 0
+
+    stacked = [
+        body
+        for condition, body in _media_blocks(css)
+        if max_width(condition) >= 768
+        and "slide" in body
+        and "grid-template-columns: minmax(0, 1fr)" in body
+    ]
+    assert stacked, "768 以下幻灯片入口应单列，避免横向溢出"
+
+
+def test_deck_keeps_sixteen_by_nine_and_hints_rotation() -> None:
+    css = DECK_CSS.read_text(encoding="utf-8")
+    assert re.search(r"aspect-ratio:\s*16\s*/\s*9", css), "deck 应保持 16:9"
+    narrow = [
+        body
+        for condition, body in _media_blocks(css)
+        if re.search(r"max-width:\s*768px", condition)
+    ]
+    assert any("rotate-hint" in body and "display: block" in body for body in narrow), (
+        "窄屏应提示横屏或全屏"
+    )
+
+
+def test_every_site_page_is_self_contained() -> None:
+    pages = sorted(SITE.rglob("*.html"))
+    assert pages, "站点没有任何 HTML"
+    for path in pages:
+        parser = Page()
+        parser.feed(path.read_text(encoding="utf-8"))
+        parser.close()
+        assert not parser.find("iframe"), f"{path.name} 含 iframe"
+        for tag in ("link", "script", "img", "source", "video", "audio"):
+            for element in parser.find(tag):
+                target = element.attrs.get("href") or element.attrs.get("src")
+                if not target:
+                    continue
+                assert not re.match(r"^(?:[a-z]+:)?//", target), (
+                    f"{path.name} 的 {tag} 请求外部资源 {target}"
+                )
