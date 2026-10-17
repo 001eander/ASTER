@@ -26,6 +26,8 @@
         <a class="nav__link" href="#agent">Agent</a>
         <a class="nav__link" href="#factor-library">因子库</a>
         <a class="nav__link" href="#automl">AutoML</a>
+        <a class="nav__link" href="#portfolio">组合优化</a>
+        <a class="nav__link" href="#production">生产</a>
         <a class="nav__link" href="#author">作者</a>
         <a class="nav__link" href="#footer">声明</a>
         <a class="nav__link" href="https://github.com/001eander/ASTER">仓库</a>
@@ -280,6 +282,155 @@
               </li>
             </ul>
           </section>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="portfolio" aria-labelledby="portfolio-title">
+      <div class="shell">
+        <p class="kicker">组合优化</p>
+        <h2 class="section__title" id="portfolio-title">把一列打分，变成一篮子能下的单</h2>
+        <p class="section__lede">信号进来是一列截面打分，出去要是一次能下单的目标持仓。指数增强路径把约束全部相对基准参数化，先解一个凸问题；解不动就逐级放宽，最后按板块取整成可报的股数。</p>
+
+        <div class="optimizer">
+          <article class="optimizer__item" id="portfolio-constraints" aria-labelledby="portfolio-constraints-title">
+            <p class="optimizer__index">01</p>
+            <h3 class="optimizer__title" id="portfolio-constraints-title">约束族</h3>
+            <p>指数增强把约束全部写成相对基准的形式，一起塞进同一个凸问题。满仓、禁卖空是硬前提，其余各项决定组合能偏离基准多远。</p>
+            <dl class="constraint-list">
+              <div>
+                <dt>仓位</dt>
+                <dd>满仓，禁卖空</dd>
+              </div>
+              <div>
+                <dt>个股带</dt>
+                <dd>成分 <code>bench_w ± 0.005</code>，非成分 <code>≤ 0.005</code></dd>
+              </div>
+              <div>
+                <dt>行业偏离</dt>
+                <dd>±0.5%（东财一级）</dd>
+              </div>
+              <div>
+                <dt>市值偏离</dt>
+                <dd>±0.5% 倍 std</dd>
+              </div>
+              <div>
+                <dt>风格暴露</dt>
+                <dd>六风格 ±0.5% 倍 std：size / beta / momentum / reverse / sigma / turnover</dd>
+              </div>
+              <div>
+                <dt>成分覆盖度</dt>
+                <dd>≥ 0.5</dd>
+              </div>
+              <div>
+                <dt>换手</dt>
+                <dd><code>Σ|w − w_prev| ≤ 0.2</code></dd>
+              </div>
+              <div>
+                <dt>目标</dt>
+                <dd><code>min −αᵀw + λwᵀΣw</code>，<code>λ = 1</code>，协方差用 Ledoit-Wolf 收缩估计</dd>
+              </div>
+            </dl>
+          </article>
+
+          <article class="optimizer__item" id="portfolio-relax" aria-labelledby="portfolio-relax-title">
+            <p class="optimizer__index">02</p>
+            <h3 class="optimizer__title" id="portfolio-relax-title">放松阶梯</h3>
+            <p>先用 <code>Minimize(0)</code> 在完全相同的约束下做可行性预检，先确认约束本身是否可解。预检不过才按顺序放松，每 3 轮循环一次，四档步长依次是 0.001、0.001、0.001、0.01，最多 60 轮。</p>
+            <ol class="ladder">
+              <li><strong>风格</strong>：六风格暴露上限逐轮放开，步长 0.001。</li>
+              <li><strong>行业/市值</strong>：行业偏离与市值偏离的上限一起放开，各 0.001。</li>
+              <li><strong>换手</strong>：最后放开换手上限，步长 0.01。</li>
+            </ol>
+            <p>轮次用尽仍不可行，走终局台阶：回到初始阈值，只把换手上限放到 2.0 再解一次。这一次仍然失败，才保持持仓（<code>STATUS_HELD</code>），当日不交易；每轮的 <code>relax_rounds</code> 与 <code>thresholds</code> 写进日志。</p>
+          </article>
+
+          <article class="optimizer__item" id="portfolio-freeze" aria-labelledby="portfolio-freeze-title">
+            <p class="optimizer__index">03</p>
+            <h3 class="optimizer__title" id="portfolio-freeze-title">冻结持仓</h3>
+            <p>调仓日的目标票停牌，或者开盘就触及涨跌停，订单不硬塞进市场，递延到下一个可成交日；既有仓位维持不变，当天的损益照常计入净值。</p>
+            <p>ST 不做任何特殊处理：涨跌停按板块与是否 ST 取预计算好的上下限，停牌标的直接移出可成交集合。递延的订单和当天新产生的订单一起排队，不会因为等待而丢掉。</p>
+          </article>
+
+          <article class="optimizer__item" id="portfolio-lots" aria-labelledby="portfolio-lots-title">
+            <p class="optimizer__index">04</p>
+            <h3 class="optimizer__title" id="portfolio-lots-title">整手可行化</h3>
+            <p>权重乘总资产得到目标金额，再按板块向下取整成能报的股数，只留下现金，不透支。</p>
+            <dl class="constraint-list">
+              <div>
+                <dt>主板 / 创业板</dt>
+                <dd>100 股整数倍</dd>
+              </div>
+              <div>
+                <dt>科创板</dt>
+                <dd>最低 200 股，超出部分按 1 股递增</dd>
+              </div>
+              <div>
+                <dt>北交所</dt>
+                <dd>最低 100 股，超出部分按 1 股递增</dd>
+              </div>
+              <div>
+                <dt>卖出</dt>
+                <dd>允许零股出清，不足一手的剩余持仓一次卖完</dd>
+              </div>
+            </dl>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section--panel" id="production" aria-labelledby="production-title">
+      <div class="shell">
+        <p class="kicker">生产闭环</p>
+        <h2 class="section__title" id="production-title">收盘后跑一遍，次日开盘照单跟</h2>
+        <p class="section__lede">每个交易日收盘后，跑批从增量数据开始，五步走完落一张 T+1 调仓单。系统只出单，不下单；成交由人执行，再把成交回录进账户。</p>
+
+        <h3 class="subhead">每个交易日的五步</h3>
+        <ol id="production-flow" data-flow="production" aria-label="每日跑批流程">
+          <li>
+            <p class="flow__index">01</p>
+            <h4 class="flow__label">数据增量</h4>
+            <p class="flow__note">拉当日行情与公司行为，跑数据体检；体检不过即中止，当天不产出任何单子。</p>
+          </li>
+          <li>
+            <p class="flow__index">02</p>
+            <h4 class="flow__label">因子重算</h4>
+            <p class="flow__note">只算 status 为 pool 的因子工件，逐日截面重算后落 parquet。</p>
+          </li>
+          <li>
+            <p class="flow__index">03</p>
+            <h4 class="flow__label">信号合成</h4>
+            <p class="flow__note">AutoML 按模型注册表里最新且未过期的版本做截面打分，产出信号工件。</p>
+          </li>
+          <li>
+            <p class="flow__index">04</p>
+            <h4 class="flow__label">组合优化</h4>
+            <p class="flow__note">cvxpy 解约束族；不可行按阶梯放松，解出来再整手取整。</p>
+          </li>
+          <li>
+            <p class="flow__index">05</p>
+            <h4 class="flow__label">T+1 调仓单</h4>
+            <p class="flow__note">与当前持仓 diff，按 T 日涨跌停与停牌预过滤，落 runs/orders：整手、参考价、预估金额。</p>
+          </li>
+        </ol>
+        <p class="flow__caption">前一步没有通过，就不进入下一步；订单在下一个交易日开盘按单执行。</p>
+
+        <div class="handoff">
+          <h3 class="handoff__title">落单之后</h3>
+          <ol class="handoff__list">
+            <li>
+              <h4 class="handoff__term">人工跟单</h4>
+              <p>次日开盘照单调仓，数量与价格以实际成交为准，不做盘中择时。</p>
+            </li>
+            <li>
+              <h4 class="handoff__term">回录成交</h4>
+              <p>成交价与数量写回虚拟账户，更新持仓与现金；和调仓单的差额留档。</p>
+            </li>
+            <li>
+              <h4 class="handoff__term">简报</h4>
+              <p>当日跑批摘要、成交与偏差、持仓变动落 runs/reports，开盘前看一眼。</p>
+            </li>
+          </ol>
         </div>
       </div>
     </section>
