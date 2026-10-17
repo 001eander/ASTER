@@ -4,3 +4,5 @@
 
 # 展示站是纯静态产物，导出页需要按字节比对，统一 LF 避免 Windows 检出成 CRLF。
 site/** text eol=lf
+# 热图 PNG 是二进制，text 属性会把 CRLF 归一化掉导致文件永远显示为已修改。
+site/**/*.png binary
