@@ -22,14 +22,14 @@ export function clampSlide(n) {
 
 /**
  * 解析 location.hash 形式的字符串。
- * `#3` 得 3，`#3?x` 也只取开头的数字；空串、`#`、非数字与负数回落到第 1 页。
+ * 只接受 `#` 后跟纯数字，例如 `#3`；空串、`#`、`#3?x`、`#3.5`、`# 3`
+ * 与负数都回落到第 1 页。合法数字再夹取到 1..11。
  */
 export function parseSlideHash(hash) {
-  if (typeof hash !== "string") return FIRST_SLIDE;
-  const body = hash.trim().replace(/^#/, "");
-  const match = /^-?\d+/.exec(body);
-  if (!match) return FIRST_SLIDE;
-  return clampSlide(Number.parseInt(match[0], 10));
+  if (typeof hash !== "string" || !hash.startsWith("#")) return FIRST_SLIDE;
+  const body = hash.slice(1);
+  if (!/^\d+$/.test(body)) return FIRST_SLIDE;
+  return clampSlide(Number.parseInt(body, 10));
 }
 
 /** 上一页，首页保持首页。 */

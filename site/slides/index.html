@@ -158,14 +158,19 @@
         <p class="slide__kicker">第 4 部分 / 项目</p>
         <h2 class="slide__title" id="slide-4-title">项目总览</h2>
       </header>
-      <div class="slide__body">
+      <div class="slide__body slide__body--tight">
         <p class="lede">A 股 alpha 衰减快，靠单因子与手工调参撑不住；研究脚本散落，回测与跟单口径不一，结论难以复现。ASTER 把这条研究链做成可以持续运行的流水线。</p>
+
+        <figure class="figure figure--overview">
+          <img src="../assets/slide-overview.svg" alt="项目总览示意图：左侧是假设靠人想、口径分散的问题，中间是持续运行、可复现可审计的目标，右侧是数据层、研究层与生产层三层架构。" width="1152" height="80">
+          <figcaption>从问题到目标：三层分工，因子库是唯一的交接点，交接物只有因子工件与信号工件。</figcaption>
+        </figure>
 
         <div class="grid grid--3">
           <section class="block" aria-labelledby="slide-4-problem">
             <p class="block__index mono">01</p>
             <h3 class="block__title" id="slide-4-problem">问题</h3>
-            <p class="block__text">假设靠人想，试错靠手跑；样本外与实盘口径不一致；因子、信号与组合散在三处，改一个环节牵动全局。</p>
+            <p class="block__text">假设靠人想、试错靠手跑，样本外与实盘口径不一致。因子、信号与组合散在三处，改一个环节牵动全局。</p>
           </section>
 
           <section class="block" aria-labelledby="slide-4-goal">
@@ -184,8 +189,6 @@
             </ul>
           </section>
         </div>
-
-        <p class="strip">研究层与生产层解耦，因子库是唯一接口；交接物只有因子工件与信号工件。</p>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">04 / 11</span>
@@ -235,14 +238,14 @@
       <div class="slide__body slide__body--split">
         <figure class="figure">
           <img src="../assets/slide-agent-loop.svg" alt="Agent 因子挖掘六步闭环示意图：课题下达后，每轮并行提出 3 条灵感，在断网沙盒里评分，结果按序写入 trace，由轮次推进下一批灵感；过门控的因子进入因子库，库里的空隙再成为新课题。" width="640" height="420">
-          <figcaption>六步闭环：课题 → 灵感 → 轮 → trace → 沙盒 → 门控。过线入库，不过线写回 trace。</figcaption>
+          <figcaption>六步闭环：依次是课题、灵感、轮、trace、沙盒与门控。过线入库，不过线写回 trace。</figcaption>
         </figure>
 
         <div class="loop">
           <ol class="terms">
             <li>
               <h3 class="term">课题</h3>
-              <p class="term__text">任务与预算单元：方向边界、禁区、验收标准；活跃课题上限 3。</p>
+              <p class="term__text">方向、预算与验收的单元：写明方向边界、禁区与验收标准；活跃课题上限 3。</p>
             </li>
             <li>
               <h3 class="term">灵感</h3>
@@ -413,7 +416,7 @@
           <section class="block block--tight" aria-labelledby="slide-9-relax">
             <p class="block__index mono">02</p>
             <h3 class="block__title" id="slide-9-relax">放松阶梯</h3>
-            <p class="block__text">Minimize(0) 预检；不可行按风格 → 行业/市值 → 换手循环，每 3 轮一次、最多 60 轮；用尽后终局把换手上限放到 2.0，仍不可行才 STATUS_HELD 保持持仓。</p>
+            <p class="block__text">Minimize(0) 预检；不可行按风格、行业与市值、换手的顺序循环，每 3 轮一次、最多 60 轮；用尽后终局把换手上限放到 2.0，仍不可行才 STATUS_HELD 保持持仓。</p>
           </section>
 
           <section class="block block--tight" aria-labelledby="slide-9-frozen">
@@ -562,6 +565,19 @@
     <div class="deck-progress" role="progressbar" aria-label="幻灯片进度" aria-valuemin="1" aria-valuemax="11" aria-valuenow="1">
       <span class="deck-progress__bar" data-progress></span>
     </div>
+    <nav class="deck-toc" aria-label="幻灯片目录">
+      <a href="#1" data-slide-link="1">1</a>
+      <a href="#2" data-slide-link="2">2</a>
+      <a href="#3" data-slide-link="3">3</a>
+      <a href="#4" data-slide-link="4">4</a>
+      <a href="#5" data-slide-link="5">5</a>
+      <a href="#6" data-slide-link="6">6</a>
+      <a href="#7" data-slide-link="7">7</a>
+      <a href="#8" data-slide-link="8">8</a>
+      <a href="#9" data-slide-link="9">9</a>
+      <a href="#10" data-slide-link="10">10</a>
+      <a href="#11" data-slide-link="11">11</a>
+    </nav>
     <nav class="deck-bar" aria-label="幻灯片导航">
       <button class="deck-bar__button" type="button" data-action="prev" aria-label="上一页" disabled>上一页</button>
       <p class="deck-bar__status" aria-live="polite">

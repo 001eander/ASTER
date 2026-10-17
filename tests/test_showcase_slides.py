@@ -432,7 +432,7 @@ def test_factor_library_slide_shows_lineage_chain(page: Page) -> None:
 
 
 def test_project_slides_carry_one_labelled_figure(page: Page) -> None:
-    for number in (5, 6, 7):
+    for number in (4, 5, 6, 7):
         images = page.inside("img", number)
         assert len(images) == 1, f"第 {number} 页应有一张主图"
         image = images[0]
@@ -476,6 +476,23 @@ def test_navigation_controls_are_labelled(page: Page) -> None:
     assert attrs.get("aria-label")
 
 
+def test_deck_toc_lists_every_slide_for_aria_current(page: Page) -> None:
+    links = [element for element in page.find("a") if "data-slide-link" in element.attrs]
+    assert len(links) == PAGE_COUNT, f"页目录应有 {PAGE_COUNT} 项"
+    assert [link.attrs["data-slide-link"] for link in links] == [
+        str(number) for number in range(1, PAGE_COUNT + 1)
+    ]
+    assert [link.attrs["href"] for link in links] == [
+        f"#{number}" for number in range(1, PAGE_COUNT + 1)
+    ]
+    toc = [nav for nav in page.find("nav") if nav.attrs.get("aria-label") == "幻灯片目录"]
+    assert len(toc) == 1, "页目录应是一个带标签的导航区"
+
+
+def test_keyboard_support_is_limited_to_arrows_home_and_end(script: str) -> None:
+    assert "PageUp" not in script and "PageDown" not in script, "spec 只要求方向键与 Home / End"
+
+
 def test_no_js_fallback_keeps_every_slide(source: str, css: str) -> None:
     html = re.search(r"<html[^>]*>", source)
     assert html and "no-js" in html.group(0)
@@ -492,8 +509,7 @@ def test_print_rules_put_one_slide_per_page(css: str) -> None:
     assert "@page" in print_block
     assert "1280px" in print_block and "720px" in print_block
     assert "break-after" in print_block
-    for chrome in ("deck-bar", "deck-progress", "rotate-hint", "skip"):
-        assert chrome in print_block, f"打印时未隐藏 {chrome}"
+    assert re.search(r"(?:^|[\s,])nav(?:[\s,{]|$)", print_block), "打印时应隐藏页目录与翻页控件"
     assert "display: none" in print_block
 
 
@@ -606,13 +622,10 @@ def test_controls_offer_single_file_download(source: str, page: Page) -> None:
     link = links[0]
     assert link.attrs["download"] == f"{TITLE}.html"
     assert link.attrs["href"] == "export.html"
-    assert "deck-bar__download" in link.attrs.get("class", "").split()
 
     inline = re.search(r'<a\b[^>]*\bdownload="[^"]*"[^>]*>(.*?)</a>', source, re.S)
     assert inline and compact(inline.group(1)), "下载链接需要可读文字"
-
-    bar = source[source.index('<nav class="deck-bar"'): source.index("</nav>")]
-    assert 'download="' in bar, "下载链接应放在打印时会被隐藏的控件条内"
+    assert "单文件" in compact(inline.group(1)), "下载链接的文案应说明单文件"
 
 
 def test_export_keeps_every_slide(export_source: str, export_page: Page) -> None:
@@ -630,8 +643,8 @@ def test_export_inlines_styles_in_order(export_source: str) -> None:
     styles = re.findall(r"<style\b[^>]*>(.*?)</style>", export_source, re.S)
     assert len(styles) >= 2, "tokens 与 slides.css 都应内联为 style"
     assert "--color-accent:" in styles[0], "第一个 style 应是 tokens.css"
-    assert any(".deck-bar" in body for body in styles[1:]), "第二个 style 应是 slides.css"
-    assert export_source.index("--color-accent:") < export_source.index(".deck-bar {")
+    assert any("--slide-w: 1280px" in body for body in styles[1:]), "第二个 style 应是 slides.css"
+    assert export_source.index("--color-accent:") < export_source.index("--slide-w: 1280px")
     assert "@media print" in export_source, "导出页仍应带打印规则"
 
 
@@ -650,7 +663,7 @@ def test_export_inlines_module_script(export_source: str) -> None:
 
 def test_export_inlines_every_image(export_page: Page) -> None:
     images = export_page.find("img")
-    assert len(images) == 3
+    assert len(images) == 4
     for image in images:
         assert image.attrs.get("src", "").startswith("data:image/"), "图片必须内联为 data URI"
         assert image.attrs.get("alt", "").strip(), "每张图片都必须有 alt"

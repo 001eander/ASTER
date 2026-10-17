@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1152 80" width="1152" height="80" role="img" aria-labelledby="slide-overview-title">
+  <title id="slide-overview-title">项目总览：问题、目标与三层架构</title>
+  <g font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0.5" y="0.5" width="299" height="79" fill="#f6f3ec" stroke="#d6cebe"/>
+    <text x="16" y="24" font-size="16" font-weight="600" fill="#191512">问题</text>
+    <text x="16" y="45" font-size="12.5" fill="#4d463d">假设靠人想、试错靠手跑</text>
+    <text x="16" y="63" font-size="12.5" fill="#4d463d">口径分散，结论难复现</text>
+
+    <line x1="308" y1="40" x2="342" y2="40" stroke="#7a5bb5" stroke-width="2"/>
+    <path d="M338 34 L347 40 L338 46 Z" fill="#7a5bb5"/>
+
+    <rect x="356.5" y="0.5" width="329" height="79" fill="#f6f3ec" stroke="#d6cebe"/>
+    <text x="372" y="24" font-size="16" font-weight="600" fill="#191512">目标</text>
+    <text x="372" y="45" font-size="12.5" fill="#4d463d">持续运行、可复现、可审计</text>
+    <text x="372" y="63" font-size="12.5" fill="#4d463d">每日落地 T+1 调仓单</text>
+
+    <line x1="694" y1="40" x2="728" y2="40" stroke="#7a5bb5" stroke-width="2"/>
+    <path d="M724 34 L733 40 L724 46 Z" fill="#7a5bb5"/>
+
+    <text x="742" y="14" font-size="12" letter-spacing="0.14em" fill="#7a5bb5">三层架构</text>
+    <rect x="742.5" y="22.5" width="129" height="57" fill="#fcfaf5" stroke="#d6cebe"/>
+    <text x="754" y="43" font-size="14" font-weight="600" fill="#191512">数据层</text>
+    <text x="754" y="60" font-size="11" fill="#4d463d">增量、校验与缓存</text>
+    <text x="754" y="73" font-size="11" fill="#4d463d">涨跌停与复权预计算</text>
+
+    <rect x="880.5" y="22.5" width="129" height="57" fill="#fcfaf5" stroke="#d6cebe"/>
+    <text x="892" y="43" font-size="14" font-weight="600" fill="#191512">研究层</text>
+    <text x="892" y="60" font-size="11" fill="#4d463d">离线跑 Agent 内循环</text>
+    <text x="892" y="73" font-size="11" fill="#4d463d">只写因子库</text>
+
+    <rect x="1018.5" y="22.5" width="133" height="57" fill="#fcfaf5" stroke="#d6cebe"/>
+    <text x="1030" y="43" font-size="14" font-weight="600" fill="#191512">生产层</text>
+    <text x="1030" y="60" font-size="11" fill="#4d463d">每日跑批读取因子库</text>
+    <text x="1030" y="73" font-size="11" fill="#4d463d">落 T+1 调仓单</text>
+  </g>
+</svg>

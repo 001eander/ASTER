@@ -103,11 +103,9 @@ document.addEventListener("keydown", (event) => {
 
   switch (event.key) {
     case "ArrowRight":
-    case "PageDown":
       show(nextSlide(current));
       break;
     case "ArrowLeft":
-    case "PageUp":
       show(prevSlide(current));
       break;
     case "Home":

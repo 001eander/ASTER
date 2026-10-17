@@ -517,6 +517,16 @@ a {
   color: var(--color-ink-muted);
 }
 
+.figure--overview img {
+  height: 80px;
+  object-fit: contain;
+}
+
+.figure--overview figcaption {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
 .terms {
   margin: 0;
   padding: 0;
@@ -778,6 +788,41 @@ a {
   transition: width var(--duration) var(--ease);
 }
 
+.deck-toc {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px;
+}
+
+.deck-toc a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 4px;
+  border: var(--rule);
+  color: var(--color-ink-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  text-decoration: none;
+  transition: border-color var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+.deck-toc a:hover,
+.deck-toc a:focus-visible {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.deck-toc a[aria-current="page"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-paper-raised);
+}
+
 .deck-bar {
   display: flex;
   align-items: center;
@@ -942,8 +987,10 @@ html.no-js .deck-chrome {
   }
 
   .skip,
+  nav,
   .deck-chrome,
   .deck-bar,
+  .deck-toc,
   .deck-progress,
   .rotate-hint {
     display: none !important;
@@ -1133,14 +1180,19 @@ html.no-js .deck-chrome {
         <p class="slide__kicker">第 4 部分 / 项目</p>
         <h2 class="slide__title" id="slide-4-title">项目总览</h2>
       </header>
-      <div class="slide__body">
+      <div class="slide__body slide__body--tight">
         <p class="lede">A 股 alpha 衰减快，靠单因子与手工调参撑不住；研究脚本散落，回测与跟单口径不一，结论难以复现。ASTER 把这条研究链做成可以持续运行的流水线。</p>
+
+        <figure class="figure figure--overview">
+          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMTUyIDgwIiB3aWR0aD0iMTE1MiIgaGVpZ2h0PSI4MCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsbGVkYnk9InNsaWRlLW92ZXJ2aWV3LXRpdGxlIj4KICA8dGl0bGUgaWQ9InNsaWRlLW92ZXJ2aWV3LXRpdGxlIj7pobnnm67mgLvop4jvvJrpl67popjjgIHnm67moIfkuI7kuInlsYLmnrbmnoQ8L3RpdGxlPgogIDxnIGZvbnQtZmFtaWx5PSJzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sICdTZWdvZSBVSScsICdQaW5nRmFuZyBTQycsICdNaWNyb3NvZnQgWWFIZWknLCBzYW5zLXNlcmlmIj4KICAgIDxyZWN0IHg9IjAuNSIgeT0iMC41IiB3aWR0aD0iMjk5IiBoZWlnaHQ9Ijc5IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4KICAgIDx0ZXh0IHg9IjE2IiB5PSIyNCIgZm9udC1zaXplPSIxNiIgZm9udC13ZWlnaHQ9IjYwMCIgZmlsbD0iIzE5MTUxMiI+6Zeu6aKYPC90ZXh0PgogICAgPHRleHQgeD0iMTYiIHk9IjQ1IiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiM0ZDQ2M2QiPuWBh+iuvumdoOS6uuaDs+OAgeivlemUmemdoOaJi+i3kTwvdGV4dD4KICAgIDx0ZXh0IHg9IjE2IiB5PSI2MyIgZm9udC1zaXplPSIxMi41IiBmaWxsPSIjNGQ0NjNkIj7lj6PlvoTliIbmlaPvvIznu5Porrrpmr7lpI3njrA8L3RleHQ+CgogICAgPGxpbmUgeDE9IjMwOCIgeTE9IjQwIiB4Mj0iMzQyIiB5Mj0iNDAiIHN0cm9rZT0iIzdhNWJiNSIgc3Ryb2tlLXdpZHRoPSIyIi8+CiAgICA8cGF0aCBkPSJNMzM4IDM0IEwzNDcgNDAgTDMzOCA0NiBaIiBmaWxsPSIjN2E1YmI1Ii8+CgogICAgPHJlY3QgeD0iMzU2LjUiIHk9IjAuNSIgd2lkdGg9IjMyOSIgaGVpZ2h0PSI3OSIgZmlsbD0iI2Y2ZjNlYyIgc3Ryb2tlPSIjZDZjZWJlIi8+CiAgICA8dGV4dCB4PSIzNzIiIHk9IjI0IiBmb250LXNpemU9IjE2IiBmb250LXdlaWdodD0iNjAwIiBmaWxsPSIjMTkxNTEyIj7nm67moIc8L3RleHQ+CiAgICA8dGV4dCB4PSIzNzIiIHk9IjQ1IiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiM0ZDQ2M2QiPuaMgee7rei/kOihjOOAgeWPr+WkjeeOsOOAgeWPr+WuoeiuoTwvdGV4dD4KICAgIDx0ZXh0IHg9IjM3MiIgeT0iNjMiIGZvbnQtc2l6ZT0iMTIuNSIgZmlsbD0iIzRkNDYzZCI+5q+P5pel6JC95ZywIFQrMSDosIPku5PljZU8L3RleHQ+CgogICAgPGxpbmUgeDE9IjY5NCIgeTE9IjQwIiB4Mj0iNzI4IiB5Mj0iNDAiIHN0cm9rZT0iIzdhNWJiNSIgc3Ryb2tlLXdpZHRoPSIyIi8+CiAgICA8cGF0aCBkPSJNNzI0IDM0IEw3MzMgNDAgTDcyNCA0NiBaIiBmaWxsPSIjN2E1YmI1Ii8+CgogICAgPHRleHQgeD0iNzQyIiB5PSIxNCIgZm9udC1zaXplPSIxMiIgbGV0dGVyLXNwYWNpbmc9IjAuMTRlbSIgZmlsbD0iIzdhNWJiNSI+5LiJ5bGC5p625p6EPC90ZXh0PgogICAgPHJlY3QgeD0iNzQyLjUiIHk9IjIyLjUiIHdpZHRoPSIxMjkiIGhlaWdodD0iNTciIGZpbGw9IiNmY2ZhZjUiIHN0cm9rZT0iI2Q2Y2ViZSIvPgogICAgPHRleHQgeD0iNzU0IiB5PSI0MyIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjYwMCIgZmlsbD0iIzE5MTUxMiI+5pWw5o2u5bGCPC90ZXh0PgogICAgPHRleHQgeD0iNzU0IiB5PSI2MCIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzRkNDYzZCI+5aKe6YeP44CB5qCh6aqM5LiO57yT5a2YPC90ZXh0PgogICAgPHRleHQgeD0iNzU0IiB5PSI3MyIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzRkNDYzZCI+5rao6LeM5YGc5LiO5aSN5p2D6aKE6K6h566XPC90ZXh0PgoKICAgIDxyZWN0IHg9Ijg4MC41IiB5PSIyMi41IiB3aWR0aD0iMTI5IiBoZWlnaHQ9IjU3IiBmaWxsPSIjZmNmYWY1IiBzdHJva2U9IiNkNmNlYmUiLz4KICAgIDx0ZXh0IHg9Ijg5MiIgeT0iNDMiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI2MDAiIGZpbGw9IiMxOTE1MTIiPueglOeptuWxgjwvdGV4dD4KICAgIDx0ZXh0IHg9Ijg5MiIgeT0iNjAiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM0ZDQ2M2QiPuemu+e6v+i3kSBBZ2VudCDlhoXlvqrnjq88L3RleHQ+CiAgICA8dGV4dCB4PSI4OTIiIHk9IjczIiBmb250LXNpemU9IjExIiBmaWxsPSIjNGQ0NjNkIj7lj6rlhpnlm6DlrZDlupM8L3RleHQ+CgogICAgPHJlY3QgeD0iMTAxOC41IiB5PSIyMi41IiB3aWR0aD0iMTMzIiBoZWlnaHQ9IjU3IiBmaWxsPSIjZmNmYWY1IiBzdHJva2U9IiNkNmNlYmUiLz4KICAgIDx0ZXh0IHg9IjEwMzAiIHk9IjQzIiBmb250LXNpemU9IjE0IiBmb250LXdlaWdodD0iNjAwIiBmaWxsPSIjMTkxNTEyIj7nlJ/kuqflsYI8L3RleHQ+CiAgICA8dGV4dCB4PSIxMDMwIiB5PSI2MCIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzRkNDYzZCI+5q+P5pel6LeR5om56K+75Y+W5Zug5a2Q5bqTPC90ZXh0PgogICAgPHRleHQgeD0iMTAzMCIgeT0iNzMiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM0ZDQ2M2QiPuiQvSBUKzEg6LCD5LuT5Y2VPC90ZXh0PgogIDwvZz4KPC9zdmc+Cg==" alt="项目总览示意图：左侧是假设靠人想、口径分散的问题，中间是持续运行、可复现可审计的目标，右侧是数据层、研究层与生产层三层架构。" width="1152" height="80">
+          <figcaption>从问题到目标：三层分工，因子库是唯一的交接点，交接物只有因子工件与信号工件。</figcaption>
+        </figure>
 
         <div class="grid grid--3">
           <section class="block" aria-labelledby="slide-4-problem">
             <p class="block__index mono">01</p>
             <h3 class="block__title" id="slide-4-problem">问题</h3>
-            <p class="block__text">假设靠人想，试错靠手跑；样本外与实盘口径不一致；因子、信号与组合散在三处，改一个环节牵动全局。</p>
+            <p class="block__text">假设靠人想、试错靠手跑，样本外与实盘口径不一致。因子、信号与组合散在三处，改一个环节牵动全局。</p>
           </section>
 
           <section class="block" aria-labelledby="slide-4-goal">
@@ -1159,8 +1211,6 @@ html.no-js .deck-chrome {
             </ul>
           </section>
         </div>
-
-        <p class="strip">研究层与生产层解耦，因子库是唯一接口；交接物只有因子工件与信号工件。</p>
       </div>
       <footer class="slide__footer">
         <span class="slide__folio mono">04 / 11</span>
@@ -1209,15 +1259,15 @@ html.no-js .deck-chrome {
       </header>
       <div class="slide__body slide__body--split">
         <figure class="figure">
-          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNDIwIiB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQyMCIgcm9sZT0iaW1nIj4NCiAgPHRpdGxlPkFnZW50IOWboOWtkOaMluaOmOWFreatpemXreeOrzwvdGl0bGU+DQogIDxkZXNjPuivvumimOS4i+i+vuWQju+8jOavj+i9ruW5tuihjOaPkOWHuiAzIOadoeeBteaEn++8jOWcqOaWree9keaymeebkumHjOivhOWIhu+8jOe7k+aenOaMieW6j+WGmeWFpSB0cmFjZe+8jOeUsei9ruasoeaOqOi/m+S4i+S4gOaJueeBteaEn++8m+i/h+mXqOaOp+eahOWboOWtkOi/m+WFpeWboOWtkOW6k++8jOW6k+mHjOeahOepuumameWGjeaIkOS4uuaWsOivvumimOOAgjwvZGVzYz4NCiAgPGRlZnM+DQogICAgPG1hcmtlciBpZD0ibG9vcC1hcnJvdyIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI5IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNyIgbWFya2VySGVpZ2h0PSI3IiBvcmllbnQ9ImF1dG8tc3RhcnQtcmV2ZXJzZSI+DQogICAgICA8cGF0aCBkPSJNMCAwIEwxMCA1IEwwIDEwIFoiIGZpbGw9IiM3YTViYjUiLz4NCiAgICA8L21hcmtlcj4NCiAgICA8bWFya2VyIGlkPSJsb29wLWRhc2giIHZpZXdCb3g9IjAgMCAxMCAxMCIgcmVmWD0iOSIgcmVmWT0iNSIgbWFya2VyV2lkdGg9IjciIG1hcmtlckhlaWdodD0iNyIgb3JpZW50PSJhdXRvLXN0YXJ0LXJldmVyc2UiPg0KICAgICAgPHBhdGggZD0iTTAgMCBMMTAgNSBMMCAxMCBaIiBmaWxsPSIjNGQ0NjNkIi8+DQogICAgPC9tYXJrZXI+DQogIDwvZGVmcz4NCg0KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQyMCIgZmlsbD0iI2ZjZmFmNSIvPg0KDQogIDwhLS0g6K++6aKYIC0tPg0KICA8cmVjdCB4PSIyMzYiIHk9IjYiIHdpZHRoPSIxNjgiIGhlaWdodD0iNjgiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPg0KICA8dGV4dCB4PSIzMjAiIHk9IjM4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU29uZ3RpIFNDLCBTVFNvbmcsIFNpbVN1biwgR2VvcmdpYSwgc2VyaWYiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxOTE1MTIiPuivvumimDwvdGV4dD4NCiAgPHRleHQgeD0iMzIwIiB5PSI2MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7mlrnlkJEgwrcg6aqM5pS25qCH5YeGPC90ZXh0Pg0KDQogIDwhLS0g54G15oSfIC0tPg0KICA8cmVjdCB4PSI0NDYiIHk9IjkyIiB3aWR0aD0iMTY4IiBoZWlnaHQ9IjY4IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4NCiAgPHRleHQgeD0iNTMwIiB5PSIxMjQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzE5MTUxMiI+54G15oSfPC90ZXh0Pg0KICA8dGV4dCB4PSI1MzAiIHk9IjE0NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7kuIDova4gMyDmnaE8L3RleHQ+DQoNCiAgPCEtLSDova4gLS0+DQogIDxyZWN0IHg9IjQ0NiIgeT0iMjUyIiB3aWR0aD0iMTY4IiBoZWlnaHQ9IjY4IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4NCiAgPHRleHQgeD0iNTMwIiB5PSIyODQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzE5MTUxMiI+6L2uPC90ZXh0Pg0KICA8dGV4dCB4PSI1MzAiIHk9IjMwNiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7oioLmi40gwrcgMzAg6L2u54aU5patPC90ZXh0Pg0KDQogIDwhLS0gdHJhY2UgLS0+DQogIDxyZWN0IHg9IjIzNiIgeT0iMzQ2IiB3aWR0aD0iMTY4IiBoZWlnaHQ9IjY4IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4NCiAgPHRleHQgeD0iMzIwIiB5PSIzNzgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJDYXNjYWRpYSBNb25vLCBDb25zb2xhcywgbW9ub3NwYWNlIiBmb250LXNpemU9IjI0IiBmaWxsPSIjMTkxNTEyIj50cmFjZTwvdGV4dD4NCiAgPHRleHQgeD0iMzIwIiB5PSI0MDAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+6YCQ6L2u6K6w5b2VIMK3IOazqOWFpeS4i+S4gOi9rjwvdGV4dD4NCg0KICA8IS0tIOaymeebkiAtLT4NCiAgPHJlY3QgeD0iMjYiIHk9IjI1MiIgd2lkdGg9IjE2OCIgaGVpZ2h0PSI2OCIgZmlsbD0iI2Y2ZjNlYyIgc3Ryb2tlPSIjZDZjZWJlIi8+DQogIDx0ZXh0IHg9IjExMCIgeT0iMjg0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU29uZ3RpIFNDLCBTVFNvbmcsIFNpbVN1biwgR2VvcmdpYSwgc2VyaWYiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxOTE1MTIiPuaymeebkjwvdGV4dD4NCiAgPHRleHQgeD0iMTEwIiB5PSIzMDYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+5pat572RIERvY2tlciDCtyBzY29yZS5qc29uPC90ZXh0Pg0KDQogIDwhLS0g6Zeo5o6nIC0tPg0KICA8cmVjdCB4PSIyNiIgeT0iOTIiIHdpZHRoPSIxNjgiIGhlaWdodD0iNjgiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPg0KICA8dGV4dCB4PSIxMTAiIHk9IjEyNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNvbmd0aSBTQywgU1RTb25nLCBTaW1TdW4sIEdlb3JnaWEsIHNlcmlmIiBmb250LXNpemU9IjI0IiBmaWxsPSIjMTkxNTEyIj7pl6jmjqc8L3RleHQ+DQogIDx0ZXh0IHg9IjExMCIgeT0iMTQ2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiM0ZDQ2M2QiPui/h+e6v+aJjeWFpeW6kzwvdGV4dD4NCg0KICA8IS0tIOeOr+S4iueahOeureWktCAtLT4NCiAgPGcgc3Ryb2tlPSIjN2E1YmI1IiBzdHJva2Utd2lkdGg9IjEuNCIgZmlsbD0ibm9uZSIgbWFya2VyLWVuZD0idXJsKCNsb29wLWFycm93KSI+DQogICAgPHBhdGggZD0iTTQwNCA1MiBMIDQ0NCAxMTIiLz4NCiAgICA8cGF0aCBkPSJNNTMwIDE2MCBWIDI0NiIvPg0KICAgIDxwYXRoIGQ9Ik00NDQgMzAwIEwgNDA2IDM2NCIvPg0KICAgIDxwYXRoIGQ9Ik0yMzYgMzg4IEwgMTk2IDMyOCIvPg0KICAgIDxwYXRoIGQ9Ik0xMTAgMjUyIFYgMTY2Ii8+DQogICAgPHBhdGggZD0iTTE5NiAxMjIgTCAyMzQgNjIiLz4NCiAgPC9nPg0KDQogIDwhLS0g5Zug5a2Q5bqT77ya546v5b+DIC0tPg0KICA8cmVjdCB4PSIyNjIiIHk9IjE4MCIgd2lkdGg9IjExNiIgaGVpZ2h0PSI4NiIgZmlsbD0iIzE3MTMxZiIvPg0KICA8dGV4dCB4PSIzMjAiIHk9IjIxNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNvbmd0aSBTQywgU1RTb25nLCBTaW1TdW4sIEdlb3JnaWEsIHNlcmlmIiBmb250LXNpemU9IjI0IiBmaWxsPSIjZjFlY2Y3Ij7lm6DlrZDlupM8L3RleHQ+DQogIDx0ZXh0IHg9IjMyMCIgeT0iMjM4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiNiOWE3ZTAiPuWUr+S4gOaOpeWPozwvdGV4dD4NCg0KICA8IS0tIOmXqOaOpyDihpIg5Zug5a2Q5bqTIC0tPg0KICA8cGF0aCBkPSJNMTk2IDE0MiBMIDI1OCAxOTYiIHN0cm9rZT0iIzdhNWJiNSIgc3Ryb2tlLXdpZHRoPSIxLjQiIGZpbGw9Im5vbmUiIG1hcmtlci1lbmQ9InVybCgjbG9vcC1hcnJvdykiLz4NCg0KICA8IS0tIOWboOWtkOW6kyDihpIg5paw6K++6aKYIC0tPg0KICA8cGF0aCBkPSJNMzc4IDIwOCBMIDM3OCA4MiIgc3Ryb2tlPSIjNGQ0NjNkIiBzdHJva2Utd2lkdGg9IjEuMiIgc3Ryb2tlLWRhc2hhcnJheT0iNSA1IiBmaWxsPSJub25lIiBtYXJrZXItZW5kPSJ1cmwoI2xvb3AtZGFzaCkiLz4NCiAgPHRleHQgeD0iMzg4IiB5PSIxNTAiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+5bqT55qE56m66ZqZPC90ZXh0Pg0KPC9zdmc+DQo=" alt="Agent 因子挖掘六步闭环示意图：课题下达后，每轮并行提出 3 条灵感，在断网沙盒里评分，结果按序写入 trace，由轮次推进下一批灵感；过门控的因子进入因子库，库里的空隙再成为新课题。" width="640" height="420">
-          <figcaption>六步闭环：课题 → 灵感 → 轮 → trace → 沙盒 → 门控。过线入库，不过线写回 trace。</figcaption>
+          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNDIwIiB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQyMCIgcm9sZT0iaW1nIj4KICA8dGl0bGU+QWdlbnQg5Zug5a2Q5oyW5o6Y5YWt5q2l6Zet546vPC90aXRsZT4KICA8ZGVzYz7or77popjkuIvovr7lkI7vvIzmr4/ova7lubbooYzmj5Dlh7ogMyDmnaHngbXmhJ/vvIzlnKjmlq3nvZHmspnnm5Lph4zor4TliIbvvIznu5PmnpzmjInluo/lhpnlhaUgdHJhY2XvvIznlLHova7mrKHmjqjov5vkuIvkuIDmibnngbXmhJ/vvJvov4fpl6jmjqfnmoTlm6DlrZDov5vlhaXlm6DlrZDlupPvvIzlupPph4znmoTnqbrpmpnlho3miJDkuLrmlrDor77popjjgII8L2Rlc2M+CiAgPGRlZnM+CiAgICA8bWFya2VyIGlkPSJsb29wLWFycm93IiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjkiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI3IiBtYXJrZXJIZWlnaHQ9IjciIG9yaWVudD0iYXV0by1zdGFydC1yZXZlcnNlIj4KICAgICAgPHBhdGggZD0iTTAgMCBMMTAgNSBMMCAxMCBaIiBmaWxsPSIjN2E1YmI1Ii8+CiAgICA8L21hcmtlcj4KICAgIDxtYXJrZXIgaWQ9Imxvb3AtZGFzaCIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI5IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNyIgbWFya2VySGVpZ2h0PSI3IiBvcmllbnQ9ImF1dG8tc3RhcnQtcmV2ZXJzZSI+CiAgICAgIDxwYXRoIGQ9Ik0wIDAgTDEwIDUgTDAgMTAgWiIgZmlsbD0iIzRkNDYzZCIvPgogICAgPC9tYXJrZXI+CiAgPC9kZWZzPgoKICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQyMCIgZmlsbD0iI2ZjZmFmNSIvPgoKICA8IS0tIOivvumimCAtLT4KICA8cmVjdCB4PSIyMzYiIHk9IjYiIHdpZHRoPSIxNjgiIGhlaWdodD0iNjgiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPgogIDx0ZXh0IHg9IjMyMCIgeT0iMzgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzE5MTUxMiI+6K++6aKYPC90ZXh0PgogIDx0ZXh0IHg9IjMyMCIgeT0iNjAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgUGluZ0ZhbmcgU0MsIE1pY3Jvc29mdCBZYUhlaSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzRkNDYzZCI+5pa55ZCRIMK3IOmqjOaUtuagh+WHhjwvdGV4dD4KCiAgPCEtLSDngbXmhJ8gLS0+CiAgPHJlY3QgeD0iNDQ2IiB5PSI5MiIgd2lkdGg9IjE2OCIgaGVpZ2h0PSI2OCIgZmlsbD0iI2Y2ZjNlYyIgc3Ryb2tlPSIjZDZjZWJlIi8+CiAgPHRleHQgeD0iNTMwIiB5PSIxMjQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzE5MTUxMiI+54G15oSfPC90ZXh0PgogIDx0ZXh0IHg9IjUzMCIgeT0iMTQ2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiM0ZDQ2M2QiPuS4gOi9riAzIOadoTwvdGV4dD4KCiAgPCEtLSDova4gLS0+CiAgPHJlY3QgeD0iNDQ2IiB5PSIyNTIiIHdpZHRoPSIxNjgiIGhlaWdodD0iNjgiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPgogIDx0ZXh0IHg9IjUzMCIgeT0iMjg0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU29uZ3RpIFNDLCBTVFNvbmcsIFNpbVN1biwgR2VvcmdpYSwgc2VyaWYiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxOTE1MTIiPui9rjwvdGV4dD4KICA8dGV4dCB4PSI1MzAiIHk9IjMwNiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7oioLmi40gwrcgMzAg6L2u54aU5patPC90ZXh0PgoKICA8IS0tIHRyYWNlIC0tPgogIDxyZWN0IHg9IjIzNiIgeT0iMzQ2IiB3aWR0aD0iMTY4IiBoZWlnaHQ9IjY4IiBmaWxsPSIjZjZmM2VjIiBzdHJva2U9IiNkNmNlYmUiLz4KICA8dGV4dCB4PSIzMjAiIHk9IjM3OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkNhc2NhZGlhIE1vbm8sIENvbnNvbGFzLCBtb25vc3BhY2UiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxOTE1MTIiPnRyYWNlPC90ZXh0PgogIDx0ZXh0IHg9IjMyMCIgeT0iNDAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiM0ZDQ2M2QiPumAkOi9ruiusOW9lSDCtyDms6jlhaXkuIvkuIDova48L3RleHQ+CgogIDwhLS0g5rKZ55uSIC0tPgogIDxyZWN0IHg9IjI2IiB5PSIyNTIiIHdpZHRoPSIxNjgiIGhlaWdodD0iNjgiIGZpbGw9IiNmNmYzZWMiIHN0cm9rZT0iI2Q2Y2ViZSIvPgogIDx0ZXh0IHg9IjExMCIgeT0iMjg0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU29uZ3RpIFNDLCBTVFNvbmcsIFNpbVN1biwgR2VvcmdpYSwgc2VyaWYiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxOTE1MTIiPuaymeebkjwvdGV4dD4KICA8dGV4dCB4PSIxMTAiIHk9IjMwNiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7mlq3nvZEgRG9ja2VyIMK3IHNjb3JlLmpzb248L3RleHQ+CgogIDwhLS0g6Zeo5o6nIC0tPgogIDxyZWN0IHg9IjI2IiB5PSI5MiIgd2lkdGg9IjE2OCIgaGVpZ2h0PSI2OCIgZmlsbD0iI2Y2ZjNlYyIgc3Ryb2tlPSIjZDZjZWJlIi8+CiAgPHRleHQgeD0iMTEwIiB5PSIxMjQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzE5MTUxMiI+6Zeo5o6nPC90ZXh0PgogIDx0ZXh0IHg9IjExMCIgeT0iMTQ2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiM0ZDQ2M2QiPui/h+e6v+aJjeWFpeW6kzwvdGV4dD4KCiAgPCEtLSDnjq/kuIrnmoTnrq3lpLQgLS0+CiAgPGcgc3Ryb2tlPSIjN2E1YmI1IiBzdHJva2Utd2lkdGg9IjEuNCIgZmlsbD0ibm9uZSIgbWFya2VyLWVuZD0idXJsKCNsb29wLWFycm93KSI+CiAgICA8cGF0aCBkPSJNNDA0IDUyIEwgNDQ0IDExMiIvPgogICAgPHBhdGggZD0iTTUzMCAxNjAgViAyNDYiLz4KICAgIDxwYXRoIGQ9Ik00NDQgMzAwIEwgNDA2IDM2NCIvPgogICAgPHBhdGggZD0iTTIzNiAzODggTCAxOTYgMzI4Ii8+CiAgICA8cGF0aCBkPSJNMTEwIDI1MiBWIDE2NiIvPgogICAgPHBhdGggZD0iTTE5NiAxMjIgTCAyMzQgNjIiLz4KICA8L2c+CgogIDwhLS0g5Zug5a2Q5bqT77ya546v5b+DIC0tPgogIDxyZWN0IHg9IjI2MiIgeT0iMTgwIiB3aWR0aD0iMTE2IiBoZWlnaHQ9Ijg2IiBmaWxsPSIjMTcxMzFmIi8+CiAgPHRleHQgeD0iMzIwIiB5PSIyMTQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTb25ndGkgU0MsIFNUU29uZywgU2ltU3VuLCBHZW9yZ2lhLCBzZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iI2YxZWNmNyI+5Zug5a2Q5bqTPC90ZXh0PgogIDx0ZXh0IHg9IjMyMCIgeT0iMjM4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIFBpbmdGYW5nIFNDLCBNaWNyb3NvZnQgWWFIZWksIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiNiOWE3ZTAiPuWUr+S4gOaOpeWPozwvdGV4dD4KCiAgPCEtLSDpl6jmjqcg5YiwIOWboOWtkOW6kyAtLT4KICA8cGF0aCBkPSJNMTk2IDE0MiBMIDI1OCAxOTYiIHN0cm9rZT0iIzdhNWJiNSIgc3Ryb2tlLXdpZHRoPSIxLjQiIGZpbGw9Im5vbmUiIG1hcmtlci1lbmQ9InVybCgjbG9vcC1hcnJvdykiLz4KCiAgPCEtLSDlm6DlrZDlupMg5YiwIOaWsOivvumimCAtLT4KICA8cGF0aCBkPSJNMzc4IDIwOCBMIDM3OCA4MiIgc3Ryb2tlPSIjNGQ0NjNkIiBzdHJva2Utd2lkdGg9IjEuMiIgc3Ryb2tlLWRhc2hhcnJheT0iNSA1IiBmaWxsPSJub25lIiBtYXJrZXItZW5kPSJ1cmwoI2xvb3AtZGFzaCkiLz4KICA8dGV4dCB4PSIzODgiIHk9IjE1MCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBQaW5nRmFuZyBTQywgTWljcm9zb2Z0IFlhSGVpLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNGQ0NjNkIj7lupPnmoTnqbrpmpk8L3RleHQ+Cjwvc3ZnPgo=" alt="Agent 因子挖掘六步闭环示意图：课题下达后，每轮并行提出 3 条灵感，在断网沙盒里评分，结果按序写入 trace，由轮次推进下一批灵感；过门控的因子进入因子库，库里的空隙再成为新课题。" width="640" height="420">
+          <figcaption>六步闭环：依次是课题、灵感、轮、trace、沙盒与门控。过线入库，不过线写回 trace。</figcaption>
         </figure>
 
         <div class="loop">
           <ol class="terms">
             <li>
               <h3 class="term">课题</h3>
-              <p class="term__text">任务与预算单元：方向边界、禁区、验收标准；活跃课题上限 3。</p>
+              <p class="term__text">方向、预算与验收的单元：写明方向边界、禁区与验收标准；活跃课题上限 3。</p>
             </li>
             <li>
               <h3 class="term">灵感</h3>
@@ -1388,7 +1438,7 @@ html.no-js .deck-chrome {
           <section class="block block--tight" aria-labelledby="slide-9-relax">
             <p class="block__index mono">02</p>
             <h3 class="block__title" id="slide-9-relax">放松阶梯</h3>
-            <p class="block__text">Minimize(0) 预检；不可行按风格 → 行业/市值 → 换手循环，每 3 轮一次、最多 60 轮；用尽后终局把换手上限放到 2.0，仍不可行才 STATUS_HELD 保持持仓。</p>
+            <p class="block__text">Minimize(0) 预检；不可行按风格、行业与市值、换手的顺序循环，每 3 轮一次、最多 60 轮；用尽后终局把换手上限放到 2.0，仍不可行才 STATUS_HELD 保持持仓。</p>
           </section>
 
           <section class="block block--tight" aria-labelledby="slide-9-frozen">
@@ -1537,6 +1587,19 @@ html.no-js .deck-chrome {
     <div class="deck-progress" role="progressbar" aria-label="幻灯片进度" aria-valuemin="1" aria-valuemax="11" aria-valuenow="1">
       <span class="deck-progress__bar" data-progress></span>
     </div>
+    <nav class="deck-toc" aria-label="幻灯片目录">
+      <a href="#1" data-slide-link="1">1</a>
+      <a href="#2" data-slide-link="2">2</a>
+      <a href="#3" data-slide-link="3">3</a>
+      <a href="#4" data-slide-link="4">4</a>
+      <a href="#5" data-slide-link="5">5</a>
+      <a href="#6" data-slide-link="6">6</a>
+      <a href="#7" data-slide-link="7">7</a>
+      <a href="#8" data-slide-link="8">8</a>
+      <a href="#9" data-slide-link="9">9</a>
+      <a href="#10" data-slide-link="10">10</a>
+      <a href="#11" data-slide-link="11">11</a>
+    </nav>
     <nav class="deck-bar" aria-label="幻灯片导航">
       <button class="deck-bar__button" type="button" data-action="prev" aria-label="上一页" disabled>上一页</button>
       <p class="deck-bar__status" aria-live="polite">
@@ -1574,14 +1637,14 @@ function clampSlide(n) {
 
 /**
  * 解析 location.hash 形式的字符串。
- * `#3` 得 3，`#3?x` 也只取开头的数字；空串、`#`、非数字与负数回落到第 1 页。
+ * 只接受 `#` 后跟纯数字，例如 `#3`；空串、`#`、`#3?x`、`#3.5`、`# 3`
+ * 与负数都回落到第 1 页。合法数字再夹取到 1..11。
  */
 function parseSlideHash(hash) {
-  if (typeof hash !== "string") return FIRST_SLIDE;
-  const body = hash.trim().replace(/^#/, "");
-  const match = /^-?\d+/.exec(body);
-  if (!match) return FIRST_SLIDE;
-  return clampSlide(Number.parseInt(match[0], 10));
+  if (typeof hash !== "string" || !hash.startsWith("#")) return FIRST_SLIDE;
+  const body = hash.slice(1);
+  if (!/^\d+$/.test(body)) return FIRST_SLIDE;
+  return clampSlide(Number.parseInt(body, 10));
 }
 
 /** 上一页，首页保持首页。 */
@@ -1695,11 +1758,9 @@ document.addEventListener("keydown", (event) => {
 
   switch (event.key) {
     case "ArrowRight":
-    case "PageDown":
       show(nextSlide(current));
       break;
     case "ArrowLeft":
-    case "PageUp":
       show(prevSlide(current));
       break;
     case "Home":

@@ -57,10 +57,10 @@
   <text x="320" y="214" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="24" fill="#f1ecf7">因子库</text>
   <text x="320" y="238" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#b9a7e0">唯一接口</text>
 
-  <!-- 门控 → 因子库 -->
+  <!-- 门控 到 因子库 -->
   <path d="M196 142 L 258 196" stroke="#7a5bb5" stroke-width="1.4" fill="none" marker-end="url(#loop-arrow)"/>
 
-  <!-- 因子库 → 新课题 -->
+  <!-- 因子库 到 新课题 -->
   <path d="M378 208 L 378 82" stroke="#4d463d" stroke-width="1.2" stroke-dasharray="5 5" fill="none" marker-end="url(#loop-dash)"/>
   <text x="388" y="150" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" fill="#4d463d">库的空隙</text>
 </svg>

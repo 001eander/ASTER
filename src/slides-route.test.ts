@@ -23,8 +23,11 @@ describe("parseSlideHash", () => {
     expect(parseSlideHash("#3")).toBe(3);
   });
 
-  it("容忍尾部杂质，取开头的数字部分", () => {
-    expect(parseSlideHash("#3?x")).toBe(3);
+  it("只接受井号后的纯数字，杂质一律回落", () => {
+    expect(parseSlideHash("#3?x")).toBe(1);
+    expect(parseSlideHash("#3.5")).toBe(1);
+    expect(parseSlideHash("# 3")).toBe(1);
+    expect(parseSlideHash("3")).toBe(1);
   });
 
   it("无 hash 回落到第 1 页", () => {

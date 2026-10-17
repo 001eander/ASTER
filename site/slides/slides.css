@@ -447,6 +447,16 @@ a {
   color: var(--color-ink-muted);
 }
 
+.figure--overview img {
+  height: 80px;
+  object-fit: contain;
+}
+
+.figure--overview figcaption {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
 .terms {
   margin: 0;
   padding: 0;
@@ -708,6 +718,41 @@ a {
   transition: width var(--duration) var(--ease);
 }
 
+.deck-toc {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px;
+}
+
+.deck-toc a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 4px;
+  border: var(--rule);
+  color: var(--color-ink-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  text-decoration: none;
+  transition: border-color var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+.deck-toc a:hover,
+.deck-toc a:focus-visible {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.deck-toc a[aria-current="page"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-paper-raised);
+}
+
 .deck-bar {
   display: flex;
   align-items: center;
@@ -872,8 +917,10 @@ html.no-js .deck-chrome {
   }
 
   .skip,
+  nav,
   .deck-chrome,
   .deck-bar,
+  .deck-toc,
   .deck-progress,
   .rotate-hint {
     display: none !important;

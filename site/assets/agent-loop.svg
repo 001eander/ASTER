@@ -9,7 +9,7 @@
 
   <rect x="0" y="0" width="720" height="500" fill="#fcfaf5"/>
 
-  <!-- 第一行：课题 → 灵感 -->
+  <!-- 第一行：课题 到 灵感 -->
   <rect x="45" y="40" width="270" height="90" rx="2" fill="#f6f3ec" stroke="#d6cebe"/>
   <text x="61" y="70" font-family="Cascadia Mono, Consolas, monospace" font-size="16" letter-spacing="2" fill="#7a5bb5">01</text>
   <text x="180" y="98" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="32" fill="#191512">课题</text>
@@ -20,7 +20,7 @@
   <text x="520" y="98" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="32" fill="#191512">灵感</text>
   <text x="520" y="120" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="16" fill="#4d463d">每轮 3 条</text>
 
-  <!-- 第二行：沙盒评分 → trace -->
+  <!-- 第二行：沙盒评分 到 trace -->
   <rect x="385" y="205" width="270" height="90" rx="2" fill="#f6f3ec" stroke="#d6cebe"/>
   <text x="401" y="235" font-family="Cascadia Mono, Consolas, monospace" font-size="16" letter-spacing="2" fill="#7a5bb5">03</text>
   <text x="520" y="263" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="32" fill="#191512">沙盒评分</text>
@@ -31,7 +31,7 @@
   <text x="180" y="263" text-anchor="middle" font-family="Cascadia Mono, Consolas, monospace" font-size="32" fill="#191512">trace</text>
   <text x="180" y="285" text-anchor="middle" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="16" fill="#4d463d">逐轮记录</text>
 
-  <!-- 第三行：门控 → 因子库 -->
+  <!-- 第三行：门控 到 因子库 -->
   <rect x="45" y="370" width="270" height="90" rx="2" fill="#f6f3ec" stroke="#d6cebe"/>
   <text x="61" y="400" font-family="Cascadia Mono, Consolas, monospace" font-size="16" letter-spacing="2" fill="#7a5bb5">05</text>
   <text x="180" y="428" text-anchor="middle" font-family="Songti SC, STSong, SimSun, Georgia, serif" font-size="32" fill="#191512">门控</text>
