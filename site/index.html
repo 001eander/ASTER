@@ -24,6 +24,8 @@
         </a>
         <a class="nav__link" href="#system">系统</a>
         <a class="nav__link" href="#agent">Agent</a>
+        <a class="nav__link" href="#factor-library">因子库</a>
+        <a class="nav__link" href="#automl">AutoML</a>
         <a class="nav__link" href="#author">作者</a>
         <a class="nav__link" href="#footer">声明</a>
         <a class="nav__link" href="https://github.com/001eander/ASTER">仓库</a>
@@ -163,6 +165,122 @@
             <dd>入库 10 个低相关因子</dd>
           </div>
         </dl>
+      </div>
+    </section>
+
+    <section class="section" id="factor-library" aria-labelledby="factor-library-title">
+      <div class="shell">
+        <p class="kicker">因子库与门控</p>
+        <h2 class="section__title" id="factor-library-title">26 个因子工件，四层防御守着入口</h2>
+        <p class="section__lede">因子库是研究层与生产层之间唯一的交接物。每一次入库都要过门控，入库之后还要定期整库，把高相关的因子挡在外面，让 pool 保持在一个可解释的规模。</p>
+
+        <dl class="factor-counts">
+          <div>
+            <dt>因子工件</dt>
+            <dd><span class="factor-counts__number">26</span></dd>
+          </div>
+          <div>
+            <dt>种子</dt>
+            <dd><span class="factor-counts__number">13</span></dd>
+          </div>
+          <div>
+            <dt>变异</dt>
+            <dd><span class="factor-counts__number">10</span></dd>
+          </div>
+          <div>
+            <dt>交叉</dt>
+            <dd><span class="factor-counts__number">3</span></dd>
+          </div>
+        </dl>
+        <p class="factor-counts__note">26 个因子工件 = 13 个种子 + 10 个变异 + 3 个交叉。13 个种子是第 0 代，13 个挖掘因子是第 1 代，全部来自 run <code>flagship-mining</code>，当前 26 条都在 pool。</p>
+
+        <h3 class="subhead">四层共线性防御</h3>
+        <ol class="steps">
+          <li>
+            <h4 class="step__term">源头分流</h4>
+            <p>上下文里注入方向分布地图：每个方向已有多少因子、质量如何、近期被拒率多高。Agent 被要求优先走低密度方向，从源头减少同族因子的堆积。</p>
+          </li>
+          <li>
+            <h4 class="step__term">生成避让</h4>
+            <p>提出新假设时，附上同方向已入库因子的摘要，只给假设与构造思路、不给代码。Agent 看得到同方向已经有什么，避免换个写法重复造同一个因子。</p>
+          </li>
+          <li>
+            <h4 class="step__term">评分折扣</h4>
+            <p>评分按 <code>score = quality × (1 − |max_corr| / 0.7)</code> 折扣，折扣写进 score.json。相关性越高，分数被压得越低，奖励信号与入库口径保持一致。</p>
+          </li>
+          <li>
+            <h4 class="step__term">入库门控与整库</h4>
+            <p>进库前检查 <code>|max_corr|</code>，超过 0.7 直接拒绝；定期整库时同一相关簇只留最强的一条；pool 容量不超过库内总条目数的一半，保持库的多样性。</p>
+          </li>
+        </ol>
+
+        <div class="lineage">
+          <h3 class="subhead">血统链与 trace</h3>
+          <p>每条库条目都带 <code>lineage{op, parents, run_id, generation}</code>：<code>op</code> 取 seed、mutation 或 crossover，另外记录父因子、来源 run 与代数。当前 <code>parents</code> 均为空，13 个种子停在第 0 代，13 个挖掘因子挂在 <code>flagship-mining</code> 的第 1 代。</p>
+          <p>trace 是课题内各轮假设、评估结果与反馈的过程记录，作用域限单个课题；血统是因子入库后写进 registry 的结构化记录。两者都保留，任何一个入库结论都能追到它是怎么来的。</p>
+        </div>
+
+        <figure class="figure">
+          <img src="assets/factor-corr.png" alt="26 个因子工件的两两截面相关系数热图。横纵轴都是因子 id，颜色越深表示相关系数越高；高相关块集中在动量、均线与波动率这些同族因子之间。" width="930" height="930" decoding="async">
+          <figcaption>因子库相关性热图：26 个因子工件的两两截面相关。颜色越深相关越高；门控以 0.7 为拒入阈值，整库时同一相关簇只留最强的一条。</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section section--panel" id="automl" aria-labelledby="automl-title">
+      <div class="shell">
+        <p class="kicker">AutoML 与 AutoResearch</p>
+        <h2 class="section__title" id="automl-title">信号合成已经上线，研究自动化还在路上</h2>
+        <p class="section__lede">左栏是每天都在跑的 AutoML 链条，右栏是 M5 的远期路线。两栏并列展示，已实现与规划中的边界写清楚。</p>
+
+        <div class="automl-grid">
+          <section id="automl-implemented" aria-labelledby="automl-implemented-title">
+            <p class="track__status track__status--done">已实现</p>
+            <h3 class="track__title" id="automl-implemented-title">AutoML：从数据集工件到信号工件</h3>
+            <ol class="track__steps">
+              <li>
+                <h4 class="track__term">数据集工件</h4>
+                <p><code>quant/automl/dataset.py</code> 把因子工件的 value 按 <code>(date, instrument)</code> 拼成宽表，附上 label 与 delay_days，落成 parquet。特征列原样使用，不做归一化或剥离。</p>
+              </li>
+              <li>
+                <h4 class="track__term">AutoGluon</h4>
+                <p><code>quant/automl/trainer.py</code> 封装 Tabular 训练，本机 GPU 上跑，presets 用 medium_quality。旗舰配置 1800 秒、约 19.9 万行；指数增强配置 600 秒、约 78.5 万行。</p>
+              </li>
+              <li>
+                <h4 class="track__term">walk-forward</h4>
+                <p><code>quant/eval/model.py</code> 与 <code>scripts/eval_model_walkforward.py</code> 负责切分：AutoGluon 只训单个窗口，训练窗口与打分窗口的切分、拼接都在 Python 侧完成，逐窗口前移。</p>
+              </li>
+              <li>
+                <h4 class="track__term">模型注册表</h4>
+                <p><code>quant/automl/rolling.py</code> 按训练截止日把模型落到 <code>runs/automl/rolling/v_&lt;train_end&gt;/</code>，旁边一份同名 <code>.meta.json</code>。每 20 个交易日重训，窗口 500 天，预热 60 天，取最新且未过期的版本。</p>
+              </li>
+              <li>
+                <h4 class="track__term">信号工件</h4>
+                <p>训练输出 parquet <code>(date, instrument, score)</code>，同一天同一标的唯一。组合层与回测只读信号工件，不直接调用模型，训练与执行因此可以分开复现。</p>
+              </li>
+            </ol>
+          </section>
+
+          <section id="automl-planned" aria-labelledby="automl-planned-title">
+            <p class="track__status">规划中 · M5</p>
+            <h3 class="track__title" id="automl-planned-title">AutoResearch：让 Agent 改模型</h3>
+            <p class="track__note">AutoResearch 是 M5 的远期路线，当前尚未实现，也没有训练产物。下面写的是方向，不是已交付的能力。</p>
+            <ul class="track__list">
+              <li>
+                <h4 class="track__term">Agent 调参</h4>
+                <p>把训练配置当作 Proposal 的对象，Agent 在内循环里提出参数组合，交回同一套沙盒评估，再按结果决定下一轮往哪里试。</p>
+              </li>
+              <li>
+                <h4 class="track__term">网络结构演化</h4>
+                <p>让 Agent 改动模型结构代码，沿用现有的构造、评分与门控流程；结构提案与因子提案共用一套 trace 与预算约束。</p>
+              </li>
+              <li>
+                <h4 class="track__term">样本外 IC 打分</h4>
+                <p>评估以 walk-forward 的样本外 IC 为准，避免在训练窗口里自证。路线参照 RD-Agent 的调参与结构协同演化，先把接口留好，再逐步接入。</p>
+              </li>
+            </ul>
+          </section>
+        </div>
       </div>
     </section>
 
