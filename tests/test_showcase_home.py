@@ -1,4 +1,4 @@
-"""展示站主页的静态验收：标题、页首字段、导航、外链与资源边界，以及系统全景与 Agent 两段。
+"""展示站主页的静态验收：标题、页首字段、导航、外链与资源边界，以及系统全景、Agent、因子库与 AutoML 各段。
 
 测试只解析站点产物，不依赖 CSS 类名或 DOM 层级。
 """
@@ -55,6 +55,8 @@ RESERVED_SECTION_IDS = (
 
 LAYER_TERMS = ("数据层", "研究层", "生产层")
 AGENT_TERMS = ("课题", "灵感", "轮", "trace", "沙盒", "门控")
+DEFENSE_TERMS = ("源头分流", "生成避让", "评分折扣", "入库门控")
+AUTOML_CONCEPTS = ("数据集工件", "AutoGluon", "walk-forward", "模型注册表", "信号工件")
 
 
 def compact(text: str) -> str:
@@ -292,6 +294,118 @@ def test_agent_loop_asset_is_self_contained_svg() -> None:
     for term in AGENT_TERMS:
         assert term in source, f"闭环图缺少 {term}"
 
+
+
+def test_home_orders_library_and_automl_between_agent_and_author(page: Page) -> None:
+    ids = [element.attrs.get("id") for element in page.elements]
+    for ident in ("agent", "factor-library", "automl", "author"):
+        assert ident in ids, f"缺少 #{ident}"
+    assert (
+        ids.index("agent")
+        < ids.index("factor-library")
+        < ids.index("automl")
+        < ids.index("author")
+    ), "栏目顺序应为 Agent、因子库、AutoML、作者"
+
+
+def test_factor_library_counts_add_up(page: Page) -> None:
+    text = compact(page.text_of("factor-library"))
+    assert len(text) >= 300, "#factor-library 内容过少"
+    for item in ("26个因子工件", "13个种子", "10个变异", "3个交叉"):
+        assert item in text, f"因子库段缺少 {item}"
+    assert "清空" not in text, "不应写与当前 registry 冲突的清空说法"
+
+
+def test_factor_library_states_generation_and_source_run(page: Page) -> None:
+    text = compact(page.text_of("factor-library"))
+    for item in ("第0代", "第1代", "flagship-mining", "pool"):
+        assert item in text, f"因子库段缺少 {item}"
+
+
+def test_factor_library_lists_four_defenses_in_order(page: Page) -> None:
+    text = compact(page.text_of("factor-library"))
+    positions = [text.find(term) for term in DEFENSE_TERMS]
+    for term, position in zip(DEFENSE_TERMS, positions):
+        assert position >= 0, f"四层防御缺少 {term}"
+    assert positions == sorted(positions), "四层防御应按源头、生成、评分、入库的顺序出现"
+    assert "方向分布地图" in text, "源头分流应说明方向分布地图"
+    assert "同方向" in text, "生成避让应说明同方向已入库摘要"
+    assert "1−|max_corr|/0.7" in text, "评分折扣应写出折扣公式"
+    assert "0.7" in text and "一半" in text, "入库门控应写出阈值与 pool 容量规则"
+    assert "同一相关簇" in text or "同簇" in text, "整库应说明同簇留强"
+
+
+def test_factor_library_explains_lineage_and_trace(page: Page) -> None:
+    text = compact(page.text_of("factor-library"))
+    for item in (
+        "lineage{op,parents,run_id,generation}",
+        "seed",
+        "mutation",
+        "crossover",
+        "血统",
+        "trace",
+    ):
+        assert item in text, f"血统链说明缺少 {item}"
+    assert "过程记录" in text and "结构化记录" in text, "应区分 trace 与血统的记录性质"
+
+
+def test_factor_library_heatmap_is_local_with_alt_and_caption(page: Page) -> None:
+    asset = SITE / "assets" / "factor-corr.png"
+    images = [
+        element
+        for element in page.find("img")
+        if "factor-library" in element.scopes
+    ]
+    if not asset.exists():
+        assert not images, "缺少热图文件时页面不应引用图片"
+        return
+    assert len(images) == 1, "因子库段需要一张本地的因子相关性热图"
+    assert images[0].attrs.get("src") == "assets/factor-corr.png"
+    assert images[0].attrs.get("alt", "").strip(), "热图缺少 alt"
+    captions = [text for scopes, text in page.captions if "factor-library" in scopes]
+    assert len(captions) == 1, "热图需要一条图注"
+    assert "相关" in compact(captions[0]), "图注应说明相关性"
+
+
+def test_automl_and_autoresearch_are_parallel_columns(page: Page) -> None:
+    columns = [element for element in page.find("section") if "automl" in element.scopes]
+    assert len(columns) == 2, "AutoML 段应为左右两栏"
+    ids = [element.attrs.get("id") for element in page.elements]
+    assert "automl-implemented" in ids and "automl-planned" in ids
+    assert ids.index("automl-implemented") < ids.index("automl-planned"), "左栏应为 AutoML"
+
+
+def test_automl_column_marks_implemented_and_covers_five_concepts(page: Page) -> None:
+    text = compact(page.text_of("automl-implemented"))
+    assert "AutoML" in text
+    assert "已实现" in text
+    for term in AUTOML_CONCEPTS:
+        assert term in text, f"AutoML 栏缺少 {term}"
+
+
+def test_autoresearch_column_is_planned_roadmap(page: Page) -> None:
+    text = compact(page.text_of("automl-planned"))
+    assert "AutoResearch" in text
+    assert "规划中" in text
+    assert "M5" in text
+    for item in ("Agent调参", "网络结构演化", "walk-forward", "样本外IC"):
+        assert item in text, f"AutoResearch 栏缺少 {item}"
+    assert "已实现" not in text, "AutoResearch 不能写成已实现"
+    assert "已完成" not in text, "AutoResearch 不能写成已完成"
+
+
+def test_navigation_links_to_library_and_automl(page: Page) -> None:
+    hrefs = [
+        element.attrs.get("href")
+        for element in page.find("a")
+        if "top" in element.scopes
+    ]
+    expected = ("#system", "#agent", "#factor-library", "#automl", "#author", "#footer")
+    for target in expected:
+        assert target in hrefs, f"导航缺少 {target}"
+    positions = [hrefs.index(target) for target in expected]
+    assert positions == sorted(positions), "导航顺序应保持不变，新链接插在 Agent 与作者之间"
+    assert page.has_id("factor-library") and page.has_id("automl")
 
 
 def test_author_section_completes_application_record(page: Page) -> None:
